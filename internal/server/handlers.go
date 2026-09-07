@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/whatsnewdock/whatsnewdock/internal/config"
@@ -98,11 +100,8 @@ func (s *Server) handleOIDCURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := randomHex(16)
-	redirect := r.URL.Query().Get("redirect")
-	if redirect == "" {
-		redirect = "/"
-	}
-	http.SetCookie(w, &http.Cookie{
+	redirect := safeRedirect(r.URL.Query().Get("redirect"))
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- HttpOnly and SameSite set; Secure derived from TLS
 		Name:     "wnd_oidc_state",
 		Value:    state,
 		Path:     "/",
@@ -111,7 +110,7 @@ func (s *Server) handleOIDCURL(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   600,
 	})
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- HttpOnly and SameSite set; Secure derived from TLS
 		Name:     "wnd_oidc_redirect",
 		Value:    redirect,
 		Path:     "/",
@@ -129,8 +128,9 @@ func (s *Server) handleOIDCURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	if err := r.URL.Query().Get("error"); err != "" {
-		http.Redirect(w, r, "/login?error="+err, http.StatusFound)
+	if e := r.URL.Query().Get("error"); e != "" {
+		slog.Warn("oidc provider returned error", "error", e)
+		http.Redirect(w, r, "/login?error=oidc_error", http.StatusFound)
 		return
 	}
 	stateCookie, err := r.Cookie("wnd_oidc_state")
@@ -157,12 +157,12 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.AddEvent(s.eventNow("auth", identity.Username, "", "", "oidc login"))
 
 	redirect := "/"
-	if rc, err := r.Cookie("wnd_oidc_redirect"); err == nil && rc.Value != "" {
-		redirect = rc.Value
+	if rc, err := r.Cookie("wnd_oidc_redirect"); err == nil {
+		redirect = safeRedirect(rc.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "wnd_oidc_state", Value: "", Path: "/", MaxAge: -1})
-	http.SetCookie(w, &http.Cookie{Name: "wnd_oidc_redirect", Value: "", Path: "/", MaxAge: -1})
-	http.Redirect(w, r, redirect, http.StatusFound)
+	clearCookie(w, "wnd_oidc_state")
+	clearCookie(w, "wnd_oidc_redirect")
+	http.Redirect(w, r, redirect, http.StatusFound) // #nosec G710 -- redirect validated to a same-site path via safeRedirect
 }
 
 // --- small helpers --------------------------------------------------------
@@ -171,6 +171,21 @@ func randomHex(n int) string {
 	b := make([]byte, n)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// safeRedirect restricts a user-supplied post-login redirect to a same-site
+// absolute path, preventing open-redirect attacks.
+func safeRedirect(raw string) string {
+	if raw == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+		return "/"
+	}
+	if strings.Contains(raw, "://") || strings.ContainsAny(raw, "\\\r\n") {
+		return "/"
+	}
+	return raw
 }
 
 func (s *Server) eventNow(kind, actor, serverID, containerID, msg string) *store.Event {

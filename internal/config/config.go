@@ -233,7 +233,7 @@ func Load(f *Flags) (*Config, error) {
 }
 
 func loadFile(cfg *Config, path string) error {
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) // #nosec G304 G703 -- path is supplied via CLI flag/env, not untrusted web input
 	if err != nil {
 		return fmt.Errorf("read config file: %w", err)
 	}

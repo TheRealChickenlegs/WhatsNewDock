@@ -33,7 +33,7 @@ type Agent struct {
 func New(cfg config.AgentConfig, docker *dockerx.Client, version string) *Agent {
 	tr := &http.Transport{}
 	if cfg.TLSSkipVerify {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- explicit opt-in for self-signed/development servers
 	}
 	return &Agent{
 		cfg:     cfg,

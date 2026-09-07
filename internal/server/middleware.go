@@ -107,7 +107,7 @@ func isMutating(method string) bool {
 // setSessionCookie writes the session cookie, respecting TLS.
 func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	secure := s.isTLS(r)
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- HttpOnly and SameSite set; Secure derived from TLS
 		Name:     sessionCookie,
 		Value:    token,
 		Path:     "/",
@@ -118,9 +118,10 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token 
 	})
 }
 
-func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+// clearCookie removes a cookie by name.
+func clearCookie(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     name,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -128,6 +129,10 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})
+}
+
+func (s *Server) clearSessionCookie(w http.ResponseWriter) {
+	clearCookie(w, sessionCookie)
 }
 
 func (s *Server) isTLS(r *http.Request) bool {

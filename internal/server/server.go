@@ -45,7 +45,7 @@ type Server struct {
 
 // New builds a server, opening storage and wiring dependencies.
 func New(cfg *config.Config, version string) (*Server, error) {
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	st, err := store.Open(filepath.Join(cfg.DataDir, "whatsnewdock.db"))
