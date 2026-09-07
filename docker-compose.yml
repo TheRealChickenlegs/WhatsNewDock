@@ -1,6 +1,6 @@
 services:
   whatsnewdock:
-    image: ghcr.io/whatsnewdock/whatsnewdock:latest
+    image: ghcr.io/therealchickenlegs/whatsnewdock:latest
     container_name: whatsnewdock
     restart: unless-stopped
     ports:
@@ -35,7 +35,7 @@ services:
 
   # --- Optional: a remote agent (deploy one per extra Docker host) ---------
   # whatsnewdock-agent:
-  #   image: ghcr.io/whatsnewdock/whatsnewdock:latest
+  #   image: ghcr.io/therealchickenlegs/whatsnewdock:latest
   #   container_name: whatsnewdock-agent
   #   restart: unless-stopped
   #   command: [] # defaults to server mode; override via env below

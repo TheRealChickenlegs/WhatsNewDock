@@ -86,7 +86,7 @@ docker run -d --name whatsnewdock-agent \
   -e WND_AGENT_SERVER_URL=https://whatsnewdock.example.com \
   -e WND_AGENT_TOKEN=wnd_xxxx \
   -e WND_AGENT_NAME=homelab-nas \
-  ghcr.io/<your-repo>:latest
+  ghcr.io/therealchickenlegs/whatsnewdock:latest
 ```
 
 ---
@@ -266,13 +266,12 @@ frontend into `internal/webui/dist` before building the Go binary.
   `gosec` static analysis, `govulncheck` vulnerability scan, and frontend
   typecheck/build/`npm audit`.
 - **`.github/workflows/build-publish.yml`** — on tags and `main`: builds
-  multi-arch (`linux/amd64`, `linux/arm64`) images, pushes to **GHCR** (and
-  Docker Hub if `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets are set), and
+  multi-arch (`linux/amd64`, `linux/arm64`) images, pushes them to **GHCR**, and
   runs a **Trivy** scan.
 
-> After pushing to your own GitHub repo, the published image is
-> `ghcr.io/<your-repo>`. Update `docker-compose.yml` and the agent run command
-> accordingly.
+> The published image is
+> `ghcr.io/therealchickenlegs/whatsnewdock` (GHCR lowercases the repository
+> name). `docker-compose.yml` and the agent run command already reference it.
 
 ---
 
