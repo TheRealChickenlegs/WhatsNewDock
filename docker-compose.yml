@@ -1,0 +1,51 @@
+services:
+  whatsnewdock:
+    image: ghcr.io/whatsnewdock/whatsnewdock:latest
+    container_name: whatsnewdock
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # --- Required: bootstrap credentials for first login -----------------
+      WND_INITIAL_ADMIN_USER: admin
+      WND_INITIAL_ADMIN_PASSWORD: change-me-please
+      # --- Local Docker monitoring ----------------------------------------
+      # The server monitors the Docker host it runs on when the socket is
+      # mounted. For a read-only/hardened setup, replace the socket mount
+      # with a docker-socket-proxy URL via WND_DOCKER_HOST (see README).
+      WND_DOCKER_HOST: unix:///var/run/docker.sock
+      # --- Update checking -------------------------------------------------
+      WND_UPDATE_INTERVAL: 6h
+      WND_CHANGELOG_COUNT: 5
+      # WND_GITHUB_TOKEN: ghp_...
+      # --- OIDC (optional, e.g. PocketID) ----------------------------------
+      # WND_AUTH_MODE: oidc
+      # WND_OIDC_ISSUER: https://pocketid.example.com
+      # WND_OIDC_CLIENT_ID: whatsnewdock
+      # WND_OIDC_CLIENT_SECRET: secret
+      # WND_BASE_URL: https://whatsnewdock.example.com
+      # --- Reverse-proxy / TLS trust --------------------------------------
+      # WND_TRUSTED_PROXIES: 10.0.0.0/8
+    volumes:
+      - whatsnewdock-data:/data
+      # Mount the Docker socket read-only for local monitoring. Note: access
+      # to the socket is effectively root-equivalent on the host; prefer a
+      # socket proxy (Tecnativa/docker-socket-proxy) in untrusted deployments.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # --- Optional: a remote agent (deploy one per extra Docker host) ---------
+  # whatsnewdock-agent:
+  #   image: ghcr.io/whatsnewdock/whatsnewdock:latest
+  #   container_name: whatsnewdock-agent
+  #   restart: unless-stopped
+  #   command: [] # defaults to server mode; override via env below
+  #   environment:
+  #     WND_MODE: agent
+  #     WND_AGENT_SERVER_URL: https://whatsnewdock.example.com
+  #     WND_AGENT_TOKEN: wnd_xxxx
+  #     WND_AGENT_NAME: homelab-nas
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  whatsnewdock-data:
