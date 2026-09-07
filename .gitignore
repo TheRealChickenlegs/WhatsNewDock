@@ -1,6 +1,3 @@
-# Go toolchain (installed locally for this environment)
-.toolchain/
-
 # Build artifacts
 bin/
 *.exe

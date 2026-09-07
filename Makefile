@@ -4,7 +4,6 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BINARY  := bin/whatsnewdock
 WEB_DIR := web
 EMBED_DIR := internal/webui/dist
-NPM_CACHE ?= $(CURDIR)/.toolchain/npm-cache
 
 .PHONY: all build build-web build-go test lint fmt clean docker
 
@@ -15,7 +14,7 @@ build: build-web build-go
 
 ## Build the web UI (requires Node 20+).
 build-web:
-	cd $(WEB_DIR) && npm ci --cache $(NPM_CACHE) && npm run build
+	cd $(WEB_DIR) && npm ci && npm run build
 	rm -rf $(EMBED_DIR)
 	cp -r $(WEB_DIR)/dist $(EMBED_DIR)
 
