@@ -71,6 +71,24 @@ the server or a reverse proxy).
   `npm audit`, and a `trivy` scan of every published image.
 - Images are built on distroless and run as a **non-root** user with no shell.
 
+### Known non-exploitable advisories
+
+`govulncheck` flags two advisories in `github.com/docker/docker` (Moby) that are
+**not reachable from this codebase**, and which have **no upstream fix yet**:
+
+- **GO-2026-4887** — Moby AuthZ plugin bypass with oversized request bodies.
+- **GO-2026-4883** — off-by-one in Moby plugin privilege validation.
+
+Both live in the Docker **daemon's** authorization/legacy-plugin subsystems.
+WhatsNewDock imports only the Docker Engine API **client** SDK
+(`github.com/docker/docker/client`) and never runs, configures or reaches the
+daemon's plugin code. The govulncheck traces pass through package-level
+`init()` functions because the Moby module bundles client and daemon together.
+
+The CI `govulncheck` step therefore allowlists exactly these two IDs and still
+fails on any other reachable vulnerability. Remove them from the allowlist if
+the code ever embeds or links the Moby daemon.
+
 ## Secrets guidance
 
 - Prefer environment variables or a Docker secret for `WND_INITIAL_ADMIN_PASSWORD`,

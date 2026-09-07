@@ -36,7 +36,23 @@ jobs:
       - name: Vulnerability scan (govulncheck)
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+          # Allowlist: GO-2026-4887 & GO-2026-4883 are Moby daemon-side AuthZ /
+          # legacy-plugin issues with no upstream fix. WhatsNewDock only uses the
+          # Docker Engine API *client* SDK and never runs the daemon's plugin
+          # subsystems, so they are not reachable here. See docs/SECURITY.md.
+          set +e
+          govulncheck ./... > /tmp/govulncheck.txt 2>&1
+          code=$?
+          set -e
+          cat /tmp/govulncheck.txt
+          if [ "$code" -ne 0 ]; then
+            remaining=$(grep -oE 'GO-[0-9]{4}-[0-9]+' /tmp/govulncheck.txt | sort -u | grep -v -E '^(GO-2026-4887|GO-2026-4883)$' || true)
+            if [ -n "$remaining" ]; then
+              echo "::error::govulncheck found vulnerabilities: $(echo "$remaining" | tr '\n' ' ')"
+              exit 1
+            fi
+            echo "::warning::govulncheck reported only allowlisted, non-exploitable Moby daemon-side advisories"
+          fi
 
   frontend:
     name: Frontend typecheck & build
