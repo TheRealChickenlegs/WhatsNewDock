@@ -1,0 +1,36 @@
+# Go toolchain (installed locally for this environment)
+.toolchain/
+
+# Build artifacts
+bin/
+*.exe
+*.test
+*.out
+
+# Frontend
+web/node_modules/
+web/dist/
+web/.vite/
+
+# Embedded web assets (built by Makefile/Docker/CI; only the placeholder is tracked)
+internal/webui/dist/*
+!internal/webui/dist/index.html
+
+# Data / runtime
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment / secrets
+.env
+.env.local
+*.pem
+*.key
+*.crt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
