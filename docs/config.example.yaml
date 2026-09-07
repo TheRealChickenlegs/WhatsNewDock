@@ -1,0 +1,51 @@
+# WhatsNewDock configuration example.
+# Any of these values can also be set via WND_* environment variables
+# (environment variables take precedence over this file).
+
+mode: server
+host: 0.0.0.0
+port: 8080
+base_url: https://whatsnewdock.example.com
+data_dir: /data
+log_level: info
+trusted_proxies: "10.0.0.0/8, 172.16.0.0/12"
+
+docker:
+  host: unix:///var/run/docker.sock
+  # For a hardened socket-proxy deployment:
+  # host: http://docker-socket-proxy:2375
+  enable_recreate: true
+
+updates:
+  interval: 6h
+  changelog_count: 5
+  include_prereleases: false
+  ignore_images:
+    - "registry.example.com/*"
+    - "*/*:beta"
+  # github_token: ghp_...
+  # gitlab_token: glpat-...
+  registries:
+    registry.example.com:
+      source: gitea
+      base_url: https://registry.example.com
+      repo_map:
+        "team/app": "team/app"
+
+auth:
+  mode: local            # local | oidc | both
+  session_ttl: 24h
+  oidc:
+    issuer_url: https://pocketid.example.com
+    client_id: whatsnewdock
+    client_secret: change-me
+    # redirect_url: https://whatsnewdock.example.com/api/auth/oidc/callback
+    scopes: [openid, profile, email]
+    username_claim: preferred_username
+    default_role: viewer
+
+agent:
+  server_url: https://whatsnewdock.example.com
+  token: wnd_xxxx
+  name: homelab-nas
+  interval: 30s
