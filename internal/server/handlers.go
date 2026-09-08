@@ -128,17 +128,31 @@ func (s *Server) handleOIDCURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
-	if e := r.URL.Query().Get("error"); e != "" {
+	// Pocket ID 2.7.0+ form-posts the callback parameters (code, state, error)
+	// rather than returning them in the URL query string, so read them from
+	// either the query string or the form body.
+	if e := r.FormValue("error"); e != "" {
 		slog.Warn("oidc provider returned error", "error", e)
 		http.Redirect(w, r, "/login?error=oidc_error", http.StatusFound)
 		return
 	}
+	stateParam := r.FormValue("state")
 	stateCookie, err := r.Cookie("wnd_oidc_state")
-	if err != nil || stateCookie.Value == "" || stateCookie.Value != r.URL.Query().Get("state") {
+	cookieValue := ""
+	if err == nil {
+		cookieValue = stateCookie.Value
+	}
+	if cookieValue == "" || cookieValue != stateParam {
+		slog.Warn("oidc state validation failed",
+			"method", r.Method,
+			"cookie_present", cookieValue != "",
+			"state_param_present", stateParam != "",
+			"cookie_len", len(cookieValue),
+			"state_param_len", len(stateParam))
 		writeError(w, http.StatusBadRequest, "invalid oidc state")
 		return
 	}
-	code := r.URL.Query().Get("code")
+	code := r.FormValue("code")
 	if code == "" {
 		writeError(w, http.StatusBadRequest, "missing code")
 		return
