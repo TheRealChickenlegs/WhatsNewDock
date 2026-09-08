@@ -47,6 +47,9 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/v1/settings", s.requireAdmin(http.HandlerFunc(s.handleGetSettings)))
 	mux.Handle("PUT /api/v1/settings", s.requireAdmin(http.HandlerFunc(s.handlePutSettings)))
 
+	mux.Handle("GET /api/v1/auth/settings", s.requireAdmin(http.HandlerFunc(s.handleGetAuthSettings)))
+	mux.Handle("PUT /api/v1/auth/settings", s.requireAdmin(http.HandlerFunc(s.handlePutAuthSettings)))
+
 	mux.Handle("GET /api/v1/users", s.requireAdmin(http.HandlerFunc(s.handleListUsers)))
 	mux.Handle("POST /api/v1/users", s.requireAdmin(http.HandlerFunc(s.handleCreateUser)))
 	mux.Handle("PATCH /api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.handleUpdateUser)))

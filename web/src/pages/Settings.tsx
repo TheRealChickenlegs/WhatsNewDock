@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw, Plus, Trash2, KeyRound } from 'lucide-react'
+import { RefreshCw, Plus, Trash2, KeyRound, ShieldCheck } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
 import { api } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import type { Settings as SettingsData, User } from '@/lib/types'
+import type { Settings as SettingsData, User, AuthSettings, AuthSettingsUpdate } from '@/lib/types'
 import { Badge, Button, Card, CardHeader, Input, Label, Select, Toggle, Loading } from '@/components/ui'
 import { formatDate } from '@/lib/utils'
 
@@ -29,7 +29,7 @@ export default function Settings() {
       </div>
       <UpdateSettings />
       <UserManagement />
-      <AuthInfo />
+      <AuthSettingsForm />
     </div>
   )
 }
@@ -297,22 +297,180 @@ function PasswordDialog({
   )
 }
 
-function AuthInfo() {
-  const { data } = useFetch<SettingsData>('/api/v1/settings')
+function AuthSettingsForm() {
+  const { data, loading, refetch } = useFetch<AuthSettings>('/api/v1/auth/settings')
+  const [passwordOn, setPasswordOn] = useState(true)
+  const [oidcOn, setOidcOn] = useState(false)
+  const [sessionTtl, setSessionTtl] = useState('24h')
+  const [issuerUrl, setIssuerUrl] = useState('')
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [redirectUrl, setRedirectUrl] = useState('')
+  const [scopes, setScopes] = useState('openid,profile,email')
+  const [usernameClaim, setUsernameClaim] = useState('preferred_username')
+  const [defaultRole, setDefaultRole] = useState('viewer')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    if (!data) return
+    const mode = data.mode
+    setPasswordOn(mode !== 'oidc')
+    setOidcOn(mode === 'oidc' || mode === 'both')
+    setSessionTtl(data.session_ttl)
+    setIssuerUrl(data.oidc.issuer_url || '')
+    setClientId(data.oidc.client_id || '')
+    setRedirectUrl(data.oidc.redirect_url || '')
+    setScopes((data.oidc.scopes || []).join(',') || 'openid,profile,email')
+    setUsernameClaim(data.oidc.username_claim || 'preferred_username')
+    setDefaultRole(data.oidc.default_role || 'viewer')
+  }, [data])
+
+  const canTogglePassword = oidcOn // password can only be disabled while OIDC is on
+
+  const save = async () => {
+    setError('')
+    setSaved(false)
+    if (!passwordOn && !oidcOn) {
+      setError('At least one authentication method must remain enabled.')
+      return
+    }
+    const mode = passwordOn && oidcOn ? 'both' : passwordOn ? 'local' : 'oidc'
+    const payload: AuthSettingsUpdate = {
+      mode,
+      session_ttl: sessionTtl,
+      oidc: {
+        issuer_url: issuerUrl,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_url: redirectUrl,
+        scopes: scopes.split(',').map((s) => s.trim()).filter(Boolean),
+        username_claim: usernameClaim,
+        default_role: defaultRole,
+      },
+    }
+    setSaving(true)
+    try {
+      await api.put('/api/v1/auth/settings', payload)
+      setClientSecret('')
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2500)
+      refetch()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading && !data) return <Loading />
+
   return (
     <Card>
-      <CardHeader title="Authentication" subtitle="Read-only view of the configured auth providers." />
-      <div className="flex flex-wrap gap-2 p-5">
-        <Badge variant="primary">mode: {data?.auth_mode || '—'}</Badge>
-        {data?.oidc_enabled && <Badge variant="success">OIDC enabled</Badge>}
-        {data?.oidc_issuer && (
-          <Badge variant="muted">issuer: {data.oidc_issuer}</Badge>
+      <CardHeader
+        title={
+          <span className="inline-flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" /> Authentication
+          </span>
+        }
+        subtitle="Sign-in methods and OpenID Connect. Environment variables seed the initial values; edits here are persisted."
+      />
+
+      <div className="space-y-5 p-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2.5">
+            <div>
+              <div className="text-sm text-foreground">Password sign-in</div>
+              <div className="text-xs text-muted-foreground">Local username/password accounts</div>
+            </div>
+            <Toggle
+              checked={passwordOn}
+              disabled={!canTogglePassword}
+              onChange={(v) => setPasswordOn(v)}
+            />
+          </label>
+          <label className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2.5">
+            <div>
+              <div className="text-sm text-foreground">OIDC (SSO)</div>
+              <div className="text-xs text-muted-foreground">e.g. PocketID, Authelia, Authentik</div>
+            </div>
+            <Toggle checked={oidcOn} onChange={setOidcOn} />
+          </label>
+        </div>
+
+        {!passwordOn && oidcOn && (
+          <p className="rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning">
+            Password sign-in is disabled. Make sure OIDC works before saving, or you may lock yourself
+            out.
+          </p>
         )}
-        <Badge variant="muted">container updates: {data?.enable_recreate ? 'enabled' : 'disabled'}</Badge>
-        <p className="w-full text-xs text-muted-foreground">
-          Authentication mode and OIDC settings are configured via environment variables (see the
-          documentation).
-        </p>
+
+        {oidcOn && (
+          <div className="space-y-4 rounded-lg border border-border bg-background p-4">
+            <div className="text-sm font-medium text-foreground">OpenID Connect</div>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div>
+                <Label>Issuer URL</Label>
+                <Input value={issuerUrl} onChange={(e) => setIssuerUrl(e.target.value)} placeholder="https://pocketid.example.com" />
+              </div>
+              <div>
+                <Label>Client ID</Label>
+                <Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="whatsnewdock" />
+              </div>
+              <div>
+                <Label>Client secret {data?.oidc.client_secret_set && <span className="text-success">· set</span>}</Label>
+                <Input
+                  type="password"
+                  value={clientSecret}
+                  onChange={(e) => setClientSecret(e.target.value)}
+                  placeholder={data?.oidc.client_secret_set ? 'leave blank to keep current' : 'client secret'}
+                />
+              </div>
+              <div>
+                <Label>Redirect URL (optional)</Label>
+                <Input value={redirectUrl} onChange={(e) => setRedirectUrl(e.target.value)} placeholder="auto from base URL" />
+              </div>
+              <div>
+                <Label>Scopes (comma-separated)</Label>
+                <Input value={scopes} onChange={(e) => setScopes(e.target.value)} />
+              </div>
+              <div>
+                <Label>Username claim</Label>
+                <Input value={usernameClaim} onChange={(e) => setUsernameClaim(e.target.value)} />
+              </div>
+              <div>
+                <Label>Default role for SSO users</Label>
+                <Select value={defaultRole} onChange={(e) => setDefaultRole(e.target.value)}>
+                  <option value="viewer">viewer</option>
+                  <option value="admin">admin</option>
+                </Select>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <Label>Session timeout</Label>
+            <Select value={sessionTtl} onChange={(e) => setSessionTtl(e.target.value)}>
+              <option value="1h">1 hour</option>
+              <option value="12h">12 hours</option>
+              <option value="24h">24 hours</option>
+              <option value="168h">7 days</option>
+              <option value="720h">30 days</option>
+            </Select>
+          </div>
+        </div>
+
+        {error && <p className="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger">{error}</p>}
+
+        <div className="flex items-center justify-end gap-3 border-t border-border pt-4">
+          {saved && <span className="text-xs text-success">Saved</span>}
+          <Button onClick={save} loading={saving}>
+            Save authentication
+          </Button>
+        </div>
       </div>
     </Card>
   )

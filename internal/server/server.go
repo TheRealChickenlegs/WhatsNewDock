@@ -57,7 +57,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 			cfg.DataDir, err, os.Getuid(), os.Getgid(), os.Getuid(), os.Getgid(), cfg.DataDir)
 	}
 
-	authMgr, err := auth.New(cfg.Auth, st, cfg.BaseURL)
+	authMgr, err := auth.New(&cfg.Auth, st, cfg.BaseURL)
 	if err != nil {
 		_ = st.Close()
 		return nil, err
@@ -93,6 +93,9 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	}
 	if err := s.loadRuntimeSettings(); err != nil {
 		slog.Warn("failed to load runtime settings", "err", err)
+	}
+	if err := s.loadAuthSettings(); err != nil {
+		slog.Warn("failed to load auth settings", "err", err)
 	}
 	s.handler = s.routes()
 	return s, nil

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -36,9 +37,11 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-// Manager handles authentication state and operations.
+// Manager handles authentication state and operations. It holds a pointer to
+// the shared auth config so runtime changes (via the settings UI) take effect.
 type Manager struct {
-	cfg      config.AuthConfig
+	mu       sync.Mutex
+	cfg      *config.AuthConfig
 	st       *store.Store
 	baseURL  string
 	secret   []byte
@@ -48,7 +51,7 @@ type Manager struct {
 }
 
 // New builds an auth Manager, loading or creating the session secret.
-func New(cfg config.AuthConfig, st *store.Store, baseURL string) (*Manager, error) {
+func New(cfg *config.AuthConfig, st *store.Store, baseURL string) (*Manager, error) {
 	m := &Manager{cfg: cfg, st: st, baseURL: baseURL}
 	secret, err := m.loadSecret()
 	if err != nil {
@@ -147,13 +150,29 @@ func (m *Manager) AuthenticateLocal(ctx context.Context, username, password stri
 	return u, nil
 }
 
-// OIDCEnabled reports whether OIDC is configured.
+// OIDCEnabled reports whether OIDC is configured and permitted by the current
+// auth mode.
 func (m *Manager) OIDCEnabled() bool {
-	return m.cfg.OIDC.IssuerURL != ""
+	if m.cfg.OIDC.IssuerURL == "" {
+		return false
+	}
+	return m.cfg.Mode == config.AuthOIDC || m.cfg.Mode == config.AuthBoth
+}
+
+// InvalidateOIDC clears the cached OIDC provider so it re-initialises from the
+// (possibly changed) configuration on the next use.
+func (m *Manager) InvalidateOIDC() {
+	m.mu.Lock()
+	m.provider = nil
+	m.oauth = nil
+	m.verifier = nil
+	m.mu.Unlock()
 }
 
 // ensureOIDC lazily initialises the OIDC provider and oauth2 config.
 func (m *Manager) ensureOIDC(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.provider != nil {
 		return nil
 	}

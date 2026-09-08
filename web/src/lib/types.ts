@@ -129,3 +129,31 @@ export interface Settings {
   enable_recreate: boolean
   base_url: string
 }
+
+export interface AuthSettings {
+  mode: string
+  session_ttl: string
+  oidc: {
+    issuer_url: string
+    client_id: string
+    client_secret_set: boolean
+    redirect_url: string
+    scopes: string[]
+    username_claim: string
+    default_role: string
+  }
+}
+
+export interface AuthSettingsUpdate {
+  mode: string
+  session_ttl: string
+  oidc: {
+    issuer_url: string
+    client_id: string
+    client_secret: string
+    redirect_url: string
+    scopes: string[]
+    username_claim: string
+    default_role: string
+  }
+}
