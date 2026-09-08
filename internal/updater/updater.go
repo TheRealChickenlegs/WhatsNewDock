@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -135,20 +136,29 @@ func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *cha
 	}
 	if len(filtered) == 0 {
 		// No release notes: fall back to registry digest/tag check.
-		return u.registryFallback(ctx, c, src)
+		return u.registryFallback(ctx, c)
 	}
 
 	// Order releases newest-first by semver when possible.
 	ordered := orderBySemver(filtered)
-	latest := ordered[0].rel.Tag
 
-	// Floating/mutable tags: only report an update when the registry digest
-	// no longer matches the running image.
-	if isMutableTag(c.ImageTag) {
-		return u.registryFallback(ctx, c, src)
+	// Floating tags ("latest", "v2", "2.14", …) move over time, so the only
+	// reliable signal is whether the running image's digest still matches the
+	// registry's current manifest for that tag. When it has moved, label the
+	// update with the newest release in the same version line.
+	if isFloatingTag(c.ImageTag) {
+		upd, ok := u.registryFallback(ctx, c)
+		if !ok || upd == nil {
+			return nil, false
+		}
+		if target := newestInLine(c.ImageTag, ordered); target != "" {
+			upd.LatestTag = target
+		}
+		return upd, true
 	}
 
-	// Exact release match => position within the ordered list.
+	// Pinned tags: compare against the ordered release list.
+	latest := ordered[0].rel.Tag
 	cur, curErr := parseVer(c.ImageTag)
 	if curErr == nil {
 		behind := 0
@@ -182,16 +192,18 @@ func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *cha
 }
 
 // registryFallback compares the running image digest against the registry's
-// current digest for the tag (accurate for floating tags like "latest").
-func (u *Updater) registryFallback(ctx context.Context, c store.Container, src *changelog.Source) (*store.Update, bool) {
-	if c.ImageDigest == "" || src.Registry == "" {
+// current manifest for the tag (accurate for floating tags like "latest" or
+// "v2"). It uses the container's own registry/repository, which are parsed
+// from the image reference and available regardless of the changelog source.
+func (u *Updater) registryFallback(ctx context.Context, c store.Container) (*store.Update, bool) {
+	if c.ImageDigest == "" || c.Registry == "" || c.Repository == "" {
 		return nil, false
 	}
-	digest, err := u.ch.ManifestDigest(ctx, src.Registry, src.Repository, c.ImageTag)
-	if err != nil || digest == "" {
+	upToDate, err := u.ch.ManifestUpToDate(ctx, c.Registry, c.Repository, c.ImageTag, c.ImageDigest)
+	if err != nil {
 		return nil, false
 	}
-	if strings.EqualFold(digest, c.ImageDigest) {
+	if upToDate {
 		return nil, false
 	}
 	return &store.Update{CurrentTag: c.ImageTag, LatestTag: c.ImageTag, VersionsBehind: 1}, true
@@ -277,12 +289,82 @@ var mutableTags = map[string]bool{
 	"beta": true, "canary": true, "unstable": true, "testing": true, "next": true,
 }
 
-func isMutableTag(tag string) bool {
+// isFloatingTag reports whether a tag is a moving target rather than a pinned
+// version. In addition to the known mutable aliases ("latest", "stable", …),
+// a partial semver with 1 or 2 numeric components ("2", "v2", "2.14") is a
+// floating line tag that tracks the newest release in that line.
+func isFloatingTag(tag string) bool {
 	t := strings.ToLower(strings.TrimSpace(tag))
 	if t == "" || mutableTags[t] {
 		return true
 	}
-	return false
+	s := strings.TrimPrefix(strings.TrimPrefix(t, "v"), "V")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) != 1 && len(parts) != 2 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		if _, err := strconv.Atoi(p); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// floatingLine extracts the major and optional minor component of a floating
+// tag. ok is false when the tag has no numeric line (e.g. "latest").
+func floatingLine(tag string) (maj, min uint64, hasMinor, ok bool) {
+	s := strings.ToLower(strings.TrimSpace(tag))
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
+	if i := strings.IndexAny(s, "-+"); i >= 0 {
+		s = s[:i]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 || parts[0] == "" {
+		return 0, 0, false, false
+	}
+	m, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, false, false
+	}
+	maj = m
+	if len(parts) >= 2 && parts[1] != "" {
+		if n, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
+			return maj, n, true, true
+		}
+	}
+	return maj, 0, false, true
+}
+
+// newestInLine returns the newest release in the same major(.minor) line as the
+// floating tag, or the newest release overall when the tag has no numeric line.
+func newestInLine(tag string, ordered []versioned) string {
+	if len(ordered) == 0 {
+		return ""
+	}
+	maj, min, hasMinor, ok := floatingLine(tag)
+	if !ok {
+		return ordered[0].rel.Tag
+	}
+	for _, v := range ordered {
+		if v.ver == nil {
+			continue
+		}
+		if v.ver.Major() != maj {
+			continue
+		}
+		if hasMinor && v.ver.Minor() != min {
+			continue
+		}
+		return v.rel.Tag
+	}
+	return ordered[0].rel.Tag
 }
 
 func repoKey(src *changelog.Source) string {

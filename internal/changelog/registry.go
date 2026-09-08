@@ -139,29 +139,61 @@ func (c *Client) genericRegistryTags(ctx context.Context, registry, repo string)
 // manifestAccept lists the manifest media types we accept.
 const manifestAccept = "application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v1+prettyjws"
 
-// ManifestDigest returns the registry's current content digest for a tag.
-// It is used to detect updates for floating tags ("latest") without notes.
-func (c *Client) ManifestDigest(ctx context.Context, registry, repo, tag string) (string, error) {
+// ManifestUpToDate reports whether the running image digest still matches the
+// registry's current manifest for the tag. It accounts for multi-arch images:
+// the tag may resolve to a manifest list / OCI index, while the container runs
+// one of its platform-specific manifests.
+func (c *Client) ManifestUpToDate(ctx context.Context, registry, repo, tag, imageDigest string) (bool, error) {
+	body, digest, err := c.fetchManifest(ctx, registry, repo, tag)
+	if err != nil || digest == "" {
+		return false, err
+	}
+	if strings.EqualFold(digest, imageDigest) {
+		return true, nil
+	}
+	// The tag may point to a manifest list / OCI index whose platform
+	// manifests carry the digest the container is actually running.
+	var idx struct {
+		Manifests []struct {
+			Digest string `json:"digest"`
+		} `json:"manifests"`
+	}
+	if err := json.Unmarshal(body, &idx); err == nil {
+		for _, m := range idx.Manifests {
+			if strings.EqualFold(m.Digest, imageDigest) {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// fetchManifest retrieves the manifest body and its content digest for a tag
+// using the Docker Registry v2 anonymous token flow.
+func (c *Client) fetchManifest(ctx context.Context, registry, repo, tag string) ([]byte, string, error) {
 	host := registry
 	if registry == "docker.io" {
 		host = "registry-1.docker.io"
 	}
 	u := fmt.Sprintf("https://%s/v2/%s/manifests/%s", host, repo, tag)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	req.Header.Set("Accept", manifestAccept)
 	c.limiter.Wait()
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	_ = resp.Body.Close()
+
 	if resp.StatusCode == http.StatusUnauthorized {
 		token, err := c.fetchRegistryToken(ctx, resp.Header.Get("Www-Authenticate"))
-		_ = resp.Body.Close()
 		if err != nil || token == "" {
-			return "", err
+			return nil, "", err
 		}
 		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		req2.Header.Set("Accept", manifestAccept)
@@ -169,25 +201,25 @@ func (c *Client) ManifestDigest(ctx context.Context, registry, repo, tag string)
 		c.limiter.Wait()
 		resp2, err := c.http.Do(req2)
 		if err != nil {
-			return "", err
+			return nil, "", err
 		}
 		defer resp2.Body.Close()
+		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 8<<20))
 		if resp2.StatusCode == http.StatusNotFound || resp2.StatusCode == http.StatusUnauthorized {
-			return "", nil
+			return nil, "", nil
 		}
 		if resp2.StatusCode != http.StatusOK {
-			return "", apiErr(resp2.StatusCode, u)
+			return nil, "", apiErr(resp2.StatusCode, u)
 		}
-		return resp2.Header.Get("Docker-Content-Digest"), nil
+		return body2, resp2.Header.Get("Docker-Content-Digest"), nil
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnauthorized {
-		return "", nil
+		return nil, "", nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", apiErr(resp.StatusCode, u)
+		return nil, "", apiErr(resp.StatusCode, u)
 	}
-	return resp.Header.Get("Docker-Content-Digest"), nil
+	return body, resp.Header.Get("Docker-Content-Digest"), nil
 }
 
 // fetchRegistryToken parses the WWW-Authenticate challenge and fetches an

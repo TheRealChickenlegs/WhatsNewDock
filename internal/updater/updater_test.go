@@ -81,13 +81,49 @@ func TestComputeUpdateSkipsPrereleases(t *testing.T) {
 	}
 }
 
-func TestIsMutableTag(t *testing.T) {
-	for _, tag := range []string{"latest", "stable", "LTS", "main", "rolling"} {
-		if !isMutableTag(tag) {
-			t.Errorf("expected %q to be mutable", tag)
+func TestIsFloatingTag(t *testing.T) {
+	for _, tag := range []string{"latest", "stable", "LTS", "main", "rolling", "v2", "2", "v2.14", "2.14", "v1", "12"} {
+		if !isFloatingTag(tag) {
+			t.Errorf("expected %q to be floating", tag)
 		}
 	}
-	if isMutableTag("1.25.0") {
-		t.Error("1.25.0 should not be mutable")
+	for _, tag := range []string{"1.25.0", "v2.14.0", "2.14.1", "v2.14.0-beta.1", "2024.01.01", "release-2.10.3"} {
+		if isFloatingTag(tag) {
+			t.Errorf("expected %q to NOT be floating", tag)
+		}
+	}
+}
+
+func TestFloatingLine(t *testing.T) {
+	maj, min, hasMinor, ok := floatingLine("v2")
+	if !ok || maj != 2 || hasMinor {
+		t.Errorf("floatingLine(v2) = %d,%d,%v,%v", maj, min, hasMinor, ok)
+	}
+	maj, min, hasMinor, ok = floatingLine("v2.14")
+	if !ok || maj != 2 || min != 14 || !hasMinor {
+		t.Errorf("floatingLine(v2.14) = %d,%d,%v,%v", maj, min, hasMinor, ok)
+	}
+	if _, _, _, ok := floatingLine("latest"); ok {
+		t.Error("floatingLine(latest) should report ok=false")
+	}
+}
+
+func TestNewestInLine(t *testing.T) {
+	ordered := make([]versioned, 0, 5)
+	for _, tag := range []string{"v3.0.0", "v2.14.0", "v2.13.0", "v2.9.1", "v1.8.0"} {
+		v, err := parseVer(tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ordered = append(ordered, versioned{rel: changelog.Release{Tag: tag}, ver: v})
+	}
+	if got := newestInLine("v2", ordered); got != "v2.14.0" {
+		t.Errorf("newestInLine(v2) = %q, want v2.14.0", got)
+	}
+	if got := newestInLine("v1", ordered); got != "v1.8.0" {
+		t.Errorf("newestInLine(v1) = %q, want v1.8.0", got)
+	}
+	if got := newestInLine("latest", ordered); got != "v3.0.0" {
+		t.Errorf("newestInLine(latest) = %q, want v3.0.0", got)
 	}
 }
