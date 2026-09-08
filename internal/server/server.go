@@ -50,7 +50,11 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	}
 	st, err := store.Open(filepath.Join(cfg.DataDir, "whatsnewdock.db"))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf(
+			"open database in %s: %w — the data directory must be writable by the "+
+				"container user (uid=%d gid=%d). For a bind mount, run `chown -R %d:%d %s`, "+
+				"use a named volume, or set `user:` in docker-compose",
+			cfg.DataDir, err, os.Getuid(), os.Getgid(), os.Getuid(), os.Getgid(), cfg.DataDir)
 	}
 
 	authMgr, err := auth.New(cfg.Auth, st, cfg.BaseURL)

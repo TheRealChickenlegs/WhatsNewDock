@@ -275,6 +275,22 @@ frontend into `internal/webui/dist` before building the Go binary.
 
 ---
 
+## Troubleshooting
+
+**`unable to open database file (14)`** — the container runs as a non-root
+user (uid 65532), and the `/data` directory isn't writable by it. If you bind
+mount a host path, make it writable:
+
+```bash
+sudo chown -R 65532:65532 /path/to/whatsnewdock-data
+```
+
+or run the container as your host user with `user: "${UID}:${GID}"` in the
+compose service. The named volume in `docker-compose.yml` already handles this
+automatically.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

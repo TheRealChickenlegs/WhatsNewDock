@@ -32,6 +32,12 @@ services:
       # to the socket is effectively root-equivalent on the host; prefer a
       # socket proxy (Tecnativa/docker-socket-proxy) in untrusted deployments.
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    # The container runs as a non-root user (uid 65532). If you use a bind
+    # mount for /data (e.g. `./whatsnewdock:/data`) instead of the named volume
+    # above, make that directory writable by uid 65532:
+    #   sudo chown -R 65532:65532 ./whatsnewdock
+    # ...or run the container as your host user instead:
+    #   user: "${UID:-1000}:${GID:-1000}"
 
   # --- Optional: a remote agent (deploy one per extra Docker host) ---------
   # whatsnewdock-agent:
