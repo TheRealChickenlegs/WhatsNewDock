@@ -38,6 +38,13 @@ services:
     #   sudo chown -R 65532:65532 ./whatsnewdock
     # ...or run the container as your host user instead:
     #   user: "${UID:-1000}:${GID:-1000}"
+    #
+    # To grant access to the Docker socket, the container user must be in the
+    # host's `docker` group (the socket is owned by root:docker, mode 0660).
+    # Find the group GID with:  getent group docker | cut -d: -f3
+    # then add it as a supplementary group:
+    #   group_add:
+    #     - "${DOCKER_GID}"
 
   # --- Optional: a remote agent (deploy one per extra Docker host) ---------
   # whatsnewdock-agent:

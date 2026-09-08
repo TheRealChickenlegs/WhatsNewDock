@@ -26,6 +26,15 @@ use a **docker-socket-proxy** that exposes a minimal API surface:
 Set `WND_DOCKER_HOST=http://socket-proxy:2375`. Alternatively, use TCP with
 mutual TLS (`WND_DOCKER_TLS=1`, `WND_DOCKER_TLS_CA/CERT/KEY`).
 
+If you mount the raw socket anyway, the container user must be a member of the
+host's `docker` group (the socket is `root:docker`, mode `0660`). Grant it with
+a `group_add` directive:
+
+```yaml
+group_add:
+  - "999"   # getent group docker | cut -d: -f3
+```
+
 **No shell commands are ever executed.** Every operation — listing, inspecting,
 pulling and recreating containers — goes through the Docker Engine API client.
 The "update" action recreates a container from its existing configuration

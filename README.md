@@ -289,6 +289,18 @@ or run the container as your host user with `user: "${UID}:${GID}"` in the
 compose service. The named volume in `docker-compose.yml` already handles this
 automatically.
 
+**`permission denied while trying to connect to the Docker daemon socket`** —
+the container user isn't in the host's `docker` group (the socket is owned by
+`root:docker`, mode `0660`). Grant it with `group_add`:
+
+```yaml
+    group_add:
+      - "999"   # getent group docker | cut -d: -f3
+```
+
+or point `WND_DOCKER_HOST` at a docker-socket-proxy, which sidesteps the
+socket permission entirely and is the hardened option.
+
 ---
 
 ## License
