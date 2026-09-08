@@ -1,7 +1,6 @@
 # WhatsNewDock
 
 [![CI](https://github.com/TheRealChickenlegs/WhatsNewDock/actions/workflows/ci.yml/badge.svg)](https://github.com/TheRealChickenlegs/WhatsNewDock/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/TheRealChickenlegs/WhatsNewDock/branch/main/graph/badge.svg)](https://codecov.io/gh/TheRealChickenlegs/WhatsNewDock)
 
 A self-hosted **Docker container update monitor** with a focus on *changelogs*.
 WhatsNewDock watches every container across your Docker hosts, tells you when a
@@ -263,9 +262,9 @@ frontend into `internal/webui/dist` before building the Go binary.
 
 ## CI / CD
 
-- **`.github/workflows/ci.yml`** — on every push/PR: Go format/vet/tests
-  (with coverage uploaded to Codecov), `gosec` static analysis, `govulncheck`
-  vulnerability scan, and frontend typecheck/build/`npm audit`.
+- **`.github/workflows/ci.yml`** — on every push/PR: Go format/vet/tests,
+  `gosec` static analysis, `govulncheck` vulnerability scan, and frontend
+  typecheck/build/`npm audit`.
 - **`.github/workflows/build-publish.yml`** — on tags and `main`: builds
   multi-arch (`linux/amd64`, `linux/arm64`) images, pushes them to **GHCR**, and
   runs a **Trivy** scan.
@@ -273,19 +272,6 @@ frontend into `internal/webui/dist` before building the Go binary.
 > The published image is
 > `ghcr.io/therealchickenlegs/whatsnewdock` (GHCR lowercases the repository
 > name). `docker-compose.yml` and the agent run command already reference it.
-
-### Enabling the coverage badge
-
-The Codecov coverage badge requires a one-time setup:
-
-1. Sign in at [codecov.io](https://about.codecov.io) with GitHub and add this
-   repository.
-2. Copy the repository upload token (**Settings → General**), then add it as a
-   GitHub secret named `CODECOV_TOKEN` (repo **Settings → Secrets and
-   variables → Actions**).
-3. The CI workflow already generates `coverage.out` and uploads it to Codecov.
-   If you'd rather not manage a token, Codecov also supports OIDC
-   (`use_oidc: true` + `id-token: write`).
 
 The CI status badge works automatically — no setup required.
 

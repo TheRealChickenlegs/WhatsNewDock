@@ -27,16 +27,8 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Unit tests (with coverage)
-        run: go test -coverprofile=coverage.out ./... -count=1
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          files: coverage.out
-          flags: unittests
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Unit tests
+        run: go test ./... -count=1
 
       - name: Static security analysis (gosec)
         run: go run github.com/securego/gosec/v2/cmd/gosec@latest -quiet -exclude=G104 ./...
