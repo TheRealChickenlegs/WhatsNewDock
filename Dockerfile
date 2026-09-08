@@ -16,8 +16,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# Embed the freshly-built frontend assets.
-RUN rm -rf internal/webui/dist && cp -r /app/web/dist internal/webui/dist
+# Embed the freshly-built frontend assets from the web build stage.
+RUN rm -rf internal/webui/dist
+COPY --from=web /app/web/dist ./internal/webui/dist
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/whatsnewdock ./cmd/whatsnewdock

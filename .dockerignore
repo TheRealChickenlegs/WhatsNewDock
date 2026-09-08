@@ -1,0 +1,28 @@
+# VCS
+.git
+.gitignore
+
+# Local toolchain / build output
+.toolchain
+bin
+data
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend build artifacts (rebuilt in the web stage)
+web/node_modules
+web/dist
+web/.vite
+
+# Embedded web assets (rebuilt and copied via --from=web)
+internal/webui/dist
+
+# Docs / CI / deploy — not needed at image build time
+.github
+docs
+deploy
+*.md
+LICENSE
+docker-compose.yml
+Makefile
