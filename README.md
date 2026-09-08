@@ -75,8 +75,9 @@ and printed to the container logs on first run.
 
 ### Deploying agents on other hosts
 
-1. In the UI, go to **Settings → Servers → Add server** (or the **Servers**
-   page) and create a server. Copy the one-time agent token.
+1. Open the **Servers** page (sidebar) and click **Add server** (admin only).
+   Enter a name and create it — the UI shows the **agent token once**, along
+   with a ready-made run command. Copy the token.
 2. Run the agent on that host:
 
 ```bash
