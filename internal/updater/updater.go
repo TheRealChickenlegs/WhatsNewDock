@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -121,6 +122,7 @@ func (u *Updater) applyContainer(ctx context.Context, c store.Container, src *ch
 	upd.RepoKey = key
 	upd.Source = string(src.Type)
 	upd.SourceURL = sourceURL(src, c)
+	upd.CheckedAt = time.Now().UTC()
 	return u.st.UpsertUpdate(upd)
 }
 
@@ -187,8 +189,10 @@ func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *cha
 	if idx > 0 {
 		return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: idx}, true
 	}
-	// Current tag not found among releases; assume one step behind.
-	return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: 1}, true
+	// The tag is neither a version nor a release name (e.g. a descriptive
+	// variant tag like "server-cuda13"). Treat it as floating and rely on the
+	// registry digest to decide whether an update exists.
+	return u.registryFallback(ctx, c)
 }
 
 // registryFallback compares the running image digest against the registry's
@@ -238,6 +242,11 @@ func parseVer(tag string) (*semver.Version, error) {
 		s = s[:i]
 	}
 	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		// A lone number extracted from a non-version tag (e.g. "b10549" or
+		// "server-cuda13") is not a version.
+		return nil, fmt.Errorf("no dotted version in %q", tag)
+	}
 	for len(parts) < 3 {
 		parts = append(parts, "0")
 	}

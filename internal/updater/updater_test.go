@@ -29,6 +29,15 @@ func TestParseVer(t *testing.T) {
 	}
 }
 
+func TestParseVerRejectsNonVersions(t *testing.T) {
+	// Tags that merely contain a number are not versions.
+	for _, tag := range []string{"server-cuda13", "b10549", "alpine", "bookworm", "slim"} {
+		if _, err := parseVer(tag); err == nil {
+			t.Errorf("parseVer(%q) should have failed but succeeded", tag)
+		}
+	}
+}
+
 func rel(tag string, pre bool) changelog.Release {
 	return changelog.Release{Tag: tag, PublishedAt: time.Now(), Prerelease: pre}
 }

@@ -27,6 +27,8 @@ export function timeAgo(value: string): string {
   if (!value) return 'never'
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return '—'
+  // Guard against unset/zero timestamps (year 0001) rendering as absurd ages.
+  if (d.getFullYear() < 2000) return '—'
   const seconds = Math.floor((Date.now() - d.getTime()) / 1000)
   if (seconds < 0) return 'just now'
   const ranges: [number, string][] = [
