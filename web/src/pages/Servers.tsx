@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 import type { Container, Server } from '@/lib/types'
 import { Badge, Button, Card, Input, Label, Loading, Modal, ConfirmDialog, EmptyState } from '@/components/ui'
+import ServerNameEdit from '@/components/ServerNameEdit'
 import { formatBytes, timeAgo } from '@/lib/utils'
 
 export default function Servers() {
@@ -87,12 +88,28 @@ export default function Servers() {
                     <ServerIcon className="h-5 w-5" />
                   </div>
                   <div>
-                    <Link
-                      to={`/servers/${s.id}`}
-                      className="text-sm font-semibold text-foreground hover:text-primary"
-                    >
-                      {s.name}
-                    </Link>
+                    {isAdmin ? (
+                      <ServerNameEdit
+                        id={s.id}
+                        name={s.name}
+                        onSaved={() => refetch()}
+                        renderName={(n) => (
+                          <Link
+                            to={`/servers/${s.id}`}
+                            className="text-sm font-semibold text-foreground hover:text-primary"
+                          >
+                            {n}
+                          </Link>
+                        )}
+                      />
+                    ) : (
+                      <Link
+                        to={`/servers/${s.id}`}
+                        className="text-sm font-semibold text-foreground hover:text-primary"
+                      >
+                        {s.name}
+                      </Link>
+                    )}
                     <div className="mt-0.5 flex items-center gap-2">
                       <Badge variant={s.online ? 'success' : 'muted'}>
                         {s.online ? 'online' : 'offline'}

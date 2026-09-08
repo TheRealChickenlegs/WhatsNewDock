@@ -1,15 +1,19 @@
 import { useParams, Link } from 'react-router-dom'
 import { ArrowLeft, Cpu, MemoryStick, Server as ServerIcon } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
+import { useAuth } from '@/context/AuthContext'
 import type { Server, Stack } from '@/lib/types'
 import { Badge, Card, Loading } from '@/components/ui'
+import ServerNameEdit from '@/components/ServerNameEdit'
 import { formatBytes, timeAgo } from '@/lib/utils'
 import ContainerExplorer from '@/components/ContainerExplorer'
 
 export default function ServerDetail() {
   const { id } = useParams<{ id: string }>()
-  const { data: server, loading } = useFetch<Server>(id ? `/api/v1/servers/${id}` : null)
+  const { data: server, loading, refetch } = useFetch<Server>(id ? `/api/v1/servers/${id}` : null)
   const { data: stacks } = useFetch<Stack[]>(id ? `/api/v1/stacks?server=${id}` : null)
+  const { me } = useAuth()
+  const isAdmin = me?.role === 'admin'
 
   if (loading && !server) return <Loading />
 
@@ -28,7 +32,16 @@ export default function ServerDetail() {
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-semibold text-foreground">{server?.name}</h1>
+            {isAdmin && server ? (
+              <ServerNameEdit
+                id={server.id}
+                name={server.name}
+                onSaved={() => refetch()}
+                renderName={(n) => <h1 className="text-xl font-semibold text-foreground">{n}</h1>}
+              />
+            ) : (
+              <h1 className="text-xl font-semibold text-foreground">{server?.name}</h1>
+            )}
             {server?.online ? <Badge variant="success">online</Badge> : <Badge variant="muted">offline</Badge>}
             {server?.is_local && <Badge variant="primary">local</Badge>}
           </div>
