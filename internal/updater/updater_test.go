@@ -117,6 +117,24 @@ func TestFloatingLine(t *testing.T) {
 	}
 }
 
+func TestComputeUpdateRegistryDescriptiveTag(t *testing.T) {
+	u := &Updater{cfg: &config.UpdatesConfig{}}
+	src := &changelog.Source{Type: changelog.SourceRegistry, Registry: "docker.io", Repository: "yanwk/comfyui-boot"}
+	rels := []changelog.Release{
+		{Tag: "cu126-slim-20260907"},
+		{Tag: "latest"},
+		{Tag: "cu130-megapak-pt211"},
+	}
+	c := store.Container{ImageTag: "cu130-megapak-pt211", Registry: "docker.io", Repository: "yanwk/comfyui-boot"}
+	// A descriptive variant tag must not be reported as "N versions behind"
+	// based on its position in the (unversioned) tag list. With no digest
+	// available the fallback returns "no update".
+	upd, ok := u.computeUpdate(t.Context(), c, src, rels)
+	if ok || upd != nil {
+		t.Errorf("expected no update for descriptive registry tag, got %+v", upd)
+	}
+}
+
 func TestNewestInLine(t *testing.T) {
 	ordered := make([]versioned, 0, 5)
 	for _, tag := range []string{"v3.0.0", "v2.14.0", "v2.13.0", "v2.9.1", "v1.8.0"} {

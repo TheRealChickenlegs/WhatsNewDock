@@ -175,7 +175,15 @@ func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *cha
 		return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: behind}, true
 	}
 
-	// Non-semver current tag: fall back to position by exact tag string.
+	// Non-semver current tag. Registry tag listings (Docker Hub, GHCR, …) are
+	// not version-ordered — they mix variant and date-based tags — so the
+	// digest comparison is the only reliable update signal for them.
+	if src.Type == changelog.SourceRegistry {
+		return u.registryFallback(ctx, c)
+	}
+
+	// VCS sources (GitHub/GitLab/Gitea) have version-ordered release lists, so
+	// fall back to the tag's position (e.g. build-number tags like "b10549").
 	idx := -1
 	for i, r := range ordered {
 		if r.rel.Tag == c.ImageTag {
