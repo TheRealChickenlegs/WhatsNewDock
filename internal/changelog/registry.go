@@ -78,49 +78,82 @@ func (c *Client) dockerHubTags(ctx context.Context, repo string) ([]Release, err
 	return out, nil
 }
 
-// genericRegistryTags implements the Docker Registry v2 anonymous token flow
-// (used for ghcr.io, gcr.io, public.ecr.aws, quay.io, and self-hosted).
+// registryGet performs a GET against a Docker Registry v2 endpoint, handling
+// the anonymous token flow (401 -> fetch token -> retry with Bearer). It
+// returns the response body and Docker-Content-Digest header; ok is false when
+// the resource doesn't exist (404) or remains unauthorized after the retry.
+func (c *Client) registryGet(ctx context.Context, url, accept string) (body []byte, digest string, ok bool, err error) {
+	do := func(auth string) ([]byte, int, string, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		c.limiter.Wait()
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, 0, "", err
+		}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, 0, "", err
+		}
+		return b, resp.StatusCode, resp.Header.Get("Docker-Content-Digest"), nil
+	}
+
+	body, status, digest, err := do("")
+	if err != nil {
+		return nil, "", false, err
+	}
+	if status == http.StatusUnauthorized {
+		// Retry with an anonymous pull token. The challenge is only available
+		// from the 401 response headers, so re-fetch it separately.
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if accept != "" {
+			req.Header.Set("Accept", accept)
+		}
+		c.limiter.Wait()
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return nil, "", false, err
+		}
+		challenge := resp.Header.Get("Www-Authenticate")
+		_ = resp.Body.Close()
+
+		token, err := c.fetchRegistryToken(ctx, challenge)
+		if err != nil || token == "" {
+			return nil, "", false, err
+		}
+		body, status, digest, err = do(token)
+		if err != nil {
+			return nil, "", false, err
+		}
+	}
+	if status == http.StatusNotFound || status == http.StatusUnauthorized {
+		return nil, "", false, nil
+	}
+	if status != http.StatusOK {
+		return nil, "", false, apiErr(status, url)
+	}
+	return body, digest, true, nil
+}
+
+// genericRegistryTags lists tags using the Docker Registry v2 API (ghcr.io,
+// gcr.io, public.ecr.aws, quay.io, and self-hosted).
 func (c *Client) genericRegistryTags(ctx context.Context, registry, repo string) ([]Release, error) {
 	listURL := fmt.Sprintf("https://%s/v2/%s/tags/list?n=500", registry, repo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	body, _, ok, err := c.registryGet(ctx, listURL, "")
 	if err != nil {
 		return nil, err
 	}
-	c.limiter.Wait()
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	_ = resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		token, err := c.fetchRegistryToken(ctx, resp.Header.Get("Www-Authenticate"))
-		if err != nil {
-			return nil, err
-		}
-		if token == "" {
-			return nil, nil
-		}
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
-		req2.Header.Set("Authorization", "Bearer "+token)
-		c.limiter.Wait()
-		resp2, err := c.http.Do(req2)
-		if err != nil {
-			return nil, err
-		}
-		body, _ = io.ReadAll(io.LimitReader(resp2.Body, 8<<20))
-		_ = resp2.Body.Close()
-		if resp2.StatusCode == http.StatusNotFound || resp2.StatusCode == http.StatusUnauthorized {
-			return nil, nil
-		}
-		if resp2.StatusCode != http.StatusOK {
-			return nil, apiErr(resp2.StatusCode, listURL)
-		}
-	} else if resp.StatusCode == http.StatusNotFound {
+	if !ok {
 		return nil, nil
-	} else if resp.StatusCode != http.StatusOK {
-		return nil, apiErr(resp.StatusCode, listURL)
 	}
 
 	var parsed struct {
@@ -176,50 +209,8 @@ func (c *Client) fetchManifest(ctx context.Context, registry, repo, tag string) 
 		host = "registry-1.docker.io"
 	}
 	u := fmt.Sprintf("https://%s/v2/%s/manifests/%s", host, repo, tag)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Accept", manifestAccept)
-	c.limiter.Wait()
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	_ = resp.Body.Close()
-
-	if resp.StatusCode == http.StatusUnauthorized {
-		token, err := c.fetchRegistryToken(ctx, resp.Header.Get("Www-Authenticate"))
-		if err != nil || token == "" {
-			return nil, "", err
-		}
-		req2, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		req2.Header.Set("Accept", manifestAccept)
-		req2.Header.Set("Authorization", "Bearer "+token)
-		c.limiter.Wait()
-		resp2, err := c.http.Do(req2)
-		if err != nil {
-			return nil, "", err
-		}
-		defer resp2.Body.Close()
-		body2, _ := io.ReadAll(io.LimitReader(resp2.Body, 8<<20))
-		if resp2.StatusCode == http.StatusNotFound || resp2.StatusCode == http.StatusUnauthorized {
-			return nil, "", nil
-		}
-		if resp2.StatusCode != http.StatusOK {
-			return nil, "", apiErr(resp2.StatusCode, u)
-		}
-		return body2, resp2.Header.Get("Docker-Content-Digest"), nil
-	}
-	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusUnauthorized {
-		return nil, "", nil
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", apiErr(resp.StatusCode, u)
-	}
-	return body, resp.Header.Get("Docker-Content-Digest"), nil
+	body, digest, _, err := c.registryGet(ctx, u, manifestAccept)
+	return body, digest, err
 }
 
 // fetchRegistryToken parses the WWW-Authenticate challenge and fetches an
