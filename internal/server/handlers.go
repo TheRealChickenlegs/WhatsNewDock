@@ -43,6 +43,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "local login disabled; use OIDC")
 		return
 	}
+	if !s.loginLimiter.allow(remoteIP(r).String()) {
+		writeError(w, http.StatusTooManyRequests, "too many login attempts; try again later")
+		return
+	}
 	var req loginRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")

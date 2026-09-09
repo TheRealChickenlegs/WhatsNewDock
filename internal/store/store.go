@@ -36,9 +36,6 @@ func Open(path string) (*Store, error) {
 // Close releases the database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
-// DB exposes the underlying handle for advanced/tx use.
-func (s *Store) DB() *sql.DB { return s.db }
-
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY);
 

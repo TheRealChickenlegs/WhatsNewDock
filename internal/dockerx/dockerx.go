@@ -225,6 +225,12 @@ func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage
 
 	// 6. Start it.
 	if err := c.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		// Roll back: drop the failed replacement and restore the old container.
+		_ = c.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+		_ = c.cli.ContainerRename(ctx, containerID, insp.Name)
+		if insp.State.Running {
+			_ = c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
+		}
 		return fmt.Errorf("start replacement container: %w", err)
 	}
 

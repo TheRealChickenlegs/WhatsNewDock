@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -139,9 +140,61 @@ func (s *Server) isTLS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	// Honour X-Forwarded-Proto from a trusted reverse proxy.
-	if s.cfg.TrustedProxies != "" {
+	// Only honour X-Forwarded-Proto from addresses within the configured
+	// trusted-proxy CIDRs, otherwise any client could spoof the scheme.
+	if s.isTrustedProxy(r) {
 		return r.Header.Get("X-Forwarded-Proto") == "https"
 	}
-	return strings.HasPrefix(s.cfg.BaseURL, "https://")
+	// No TLS and not behind a configured proxy: plain HTTP, unless we only
+	// ever expect HTTPS and no trusted proxies are configured at all.
+	if s.cfg.TrustedProxies == "" {
+		return strings.HasPrefix(s.cfg.BaseURL, "https://")
+	}
+	return false
+}
+
+// isTrustedProxy reports whether the request's remote address falls within a
+// configured trusted-proxy CIDR.
+func (s *Server) isTrustedProxy(r *http.Request) bool {
+	if len(s.trustedProxies) == 0 {
+		return false
+	}
+	ip := remoteIP(r)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range s.trustedProxies {
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteIP extracts the client IP from r.RemoteAddr.
+func remoteIP(r *http.Request) net.IP {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return net.ParseIP(host)
+}
+
+// parseTrustedCIDRs parses a comma-separated list of CIDR notations, logging
+// and skipping any that fail to parse.
+func parseTrustedCIDRs(raw string) []*net.IPNet {
+	var out []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(part)
+		if err != nil {
+			slog.Warn("ignoring invalid trusted proxy CIDR", "cidr", part, "err", err)
+			continue
+		}
+		out = append(out, cidr)
+	}
+	return out
 }

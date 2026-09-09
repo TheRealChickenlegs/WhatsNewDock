@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,15 +33,17 @@ const (
 
 // Server is the central WhatsNewDock server runtime.
 type Server struct {
-	cfg     *config.Config
-	st      *store.Store
-	auth    *auth.Manager
-	docker  *dockerx.Client // nil when no local Docker access
-	ch      *changelog.Client
-	updater *updater.Updater
-	version string
-	localID string
-	handler http.Handler
+	cfg            *config.Config
+	st             *store.Store
+	auth           *auth.Manager
+	docker         *dockerx.Client // nil when no local Docker access
+	ch             *changelog.Client
+	updater        *updater.Updater
+	version        string
+	localID        string
+	handler        http.Handler
+	trustedProxies []*net.IPNet
+	loginLimiter   *loginLimiter
 }
 
 // New builds a server, opening storage and wiring dependencies.
@@ -78,13 +81,15 @@ func New(cfg *config.Config, version string) (*Server, error) {
 	up := updater.New(st, ch, &cfg.Updates)
 
 	s := &Server{
-		cfg:     cfg,
-		st:      st,
-		auth:    authMgr,
-		docker:  docker,
-		ch:      ch,
-		updater: up,
-		version: version,
+		cfg:            cfg,
+		st:             st,
+		auth:           authMgr,
+		docker:         docker,
+		ch:             ch,
+		updater:        up,
+		version:        version,
+		trustedProxies: parseTrustedCIDRs(cfg.TrustedProxies),
+		loginLimiter:   newLoginLimiter(),
 	}
 
 	if err := s.bootstrap(); err != nil {
