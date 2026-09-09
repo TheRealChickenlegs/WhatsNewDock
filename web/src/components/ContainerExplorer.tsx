@@ -1,12 +1,10 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Search, X } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
-import { api } from '@/lib/api'
-import { useAuth } from '@/context/AuthContext'
+import { useContainerActions } from '@/hooks/useContainerActions'
 import type { Container, Server, Stack } from '@/lib/types'
-import { Button, Input, Select, Loading, EmptyState, ConfirmDialog, Badge } from '@/components/ui'
+import { Button, Input, Select, Loading, EmptyState, Badge } from '@/components/ui'
 import ContainerTable from './ContainerTable'
-import ContainerDetail from './ContainerDetail'
 
 interface Props {
   title: string
@@ -31,19 +29,11 @@ export default function ContainerExplorer({
   refreshMs = 20000,
   emptyHint,
 }: Props) {
-  const { me } = useAuth()
-  const isAdmin = me?.role === 'admin'
-
   const [search, setSearch] = useState('')
   const [server, setServer] = useState(initialServer)
   const [stack, setStack] = useState(initialStack)
   const [state, setState] = useState('')
   const [hasUpdate, setHasUpdate] = useState(initialHasUpdate || alwaysUpdates)
-
-  const [selected, setSelected] = useState<Container | null>(null)
-  const [confirm, setConfirm] = useState<Container | null>(null)
-  const [updating, setUpdating] = useState(false)
-  const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const path = useMemo(() => {
     const params = new URLSearchParams()
@@ -65,39 +55,8 @@ export default function ContainerExplorer({
     [stacks, server],
   )
 
-  const notify = (type: 'success' | 'error', text: string) => {
-    setBanner({ type, text })
-    setTimeout(() => setBanner(null), 5000)
-  }
-
-  const handlePin = useCallback(
-    async (c: Container, pinned: boolean) => {
-      try {
-        await api.post(`/api/v1/containers/${c.id}/pin`, { pinned })
-        notify('success', `${c.name} ${pinned ? 'pinned' : 'unpinned'}`)
-        refetch()
-      } catch (e) {
-        notify('error', e instanceof Error ? e.message : 'Failed')
-      }
-    },
-    [refetch],
-  )
-
-  const handleConfirmUpdate = useCallback(async () => {
-    if (!confirm) return
-    setUpdating(true)
-    try {
-      await api.post(`/api/v1/containers/${confirm.id}/update`)
-      notify('success', `Update queued for ${confirm.name}`)
-      setConfirm(null)
-      setTimeout(refetch, 1500)
-    } catch (e) {
-      notify('error', e instanceof Error ? e.message : 'Update failed')
-      setConfirm(null)
-    } finally {
-      setUpdating(false)
-    }
-  }, [confirm, refetch])
+  const { isAdmin, bannerEl, selected, setSelected, requestUpdate, pin, detail, confirmDialog } =
+    useContainerActions(refetch)
 
   const list = containers || []
 
@@ -108,17 +67,7 @@ export default function ContainerExplorer({
           <h1 className="text-xl font-semibold text-foreground">{title}</h1>
           {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
         </div>
-        {banner && (
-          <div
-            className={
-              banner.type === 'success'
-                ? 'rounded-lg bg-success/10 px-3 py-2 text-xs text-success'
-                : 'rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger'
-            }
-          >
-            {banner.text}
-          </div>
-        )}
+        {bannerEl}
       </div>
 
       {showFilters && (
@@ -193,39 +142,13 @@ export default function ContainerExplorer({
           containers={list}
           isAdmin={isAdmin}
           onSelect={setSelected}
-          onUpdate={(c) => setConfirm(c)}
-          onPin={handlePin}
+          onUpdate={requestUpdate}
+          onPin={pin}
         />
       )}
 
-      <ContainerDetail
-        container={selected}
-        isAdmin={isAdmin}
-        onClose={() => setSelected(null)}
-        onUpdate={(c) => setConfirm(c)}
-        onPin={handlePin}
-      />
-
-      <ConfirmDialog
-        open={!!confirm}
-        onClose={() => setConfirm(null)}
-        onConfirm={handleConfirmUpdate}
-        title="Update container"
-        message={
-          <>
-            Update <span className="font-mono text-foreground">{confirm?.name}</span> from{' '}
-            <span className="font-mono text-foreground">{confirm?.image_tag}</span> to{' '}
-            <span className="font-mono text-foreground">{confirm?.update?.latest_tag}</span>?
-            <br />
-            <span className="text-xs">
-              The image will be pulled and the container recreated with its current configuration.
-            </span>
-          </>
-        }
-        confirmLabel="Update"
-        danger
-        loading={updating}
-      />
+      {detail}
+      {confirmDialog}
     </div>
   )
 }

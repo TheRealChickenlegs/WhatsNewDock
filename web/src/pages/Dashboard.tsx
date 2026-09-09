@@ -1,12 +1,9 @@
-import { useCallback, useState } from 'react'
 import { Server, Layers, Boxes, RefreshCw, ArrowRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useFetch } from '@/lib/hooks'
-import { api } from '@/lib/api'
-import { useAuth } from '@/context/AuthContext'
+import { useContainerActions } from '@/hooks/useContainerActions'
 import type { Container, Overview } from '@/lib/types'
-import { Badge, Card, ConfirmDialog, EmptyState, Loading } from '@/components/ui'
-import ContainerDetail from '@/components/ContainerDetail'
+import { Badge, Card, EmptyState, Loading } from '@/components/ui'
 import { timeAgo, registryLabel } from '@/lib/utils'
 
 function StatCard({
@@ -34,49 +31,9 @@ function StatCard({
 }
 
 export default function Dashboard() {
-  const { me } = useAuth()
-  const isAdmin = me?.role === 'admin'
   const { data: overview, loading } = useFetch<Overview>('/api/v1/overview', 15000)
   const { data: updates, refetch } = useFetch<Container[]>('/api/v1/updates', 30000)
-
-  const [selected, setSelected] = useState<Container | null>(null)
-  const [confirm, setConfirm] = useState<Container | null>(null)
-  const [updating, setUpdating] = useState(false)
-  const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-
-  const notify = (type: 'success' | 'error', text: string) => {
-    setBanner({ type, text })
-    setTimeout(() => setBanner(null), 5000)
-  }
-
-  const handlePin = useCallback(
-    async (c: Container, pinned: boolean) => {
-      try {
-        await api.post(`/api/v1/containers/${c.id}/pin`, { pinned })
-        notify('success', `${c.name} ${pinned ? 'pinned' : 'unpinned'}`)
-        refetch()
-      } catch (e) {
-        notify('error', e instanceof Error ? e.message : 'Failed')
-      }
-    },
-    [refetch],
-  )
-
-  const handleConfirmUpdate = useCallback(async () => {
-    if (!confirm) return
-    setUpdating(true)
-    try {
-      await api.post(`/api/v1/containers/${confirm.id}/update`)
-      notify('success', `Update queued for ${confirm.name}`)
-      setConfirm(null)
-      setTimeout(refetch, 1500)
-    } catch (e) {
-      notify('error', e instanceof Error ? e.message : 'Update failed')
-      setConfirm(null)
-    } finally {
-      setUpdating(false)
-    }
-  }, [confirm, refetch])
+  const { bannerEl, setSelected, detail, confirmDialog } = useContainerActions(refetch)
 
   if (loading && !overview) return <Loading />
 
@@ -91,17 +48,7 @@ export default function Dashboard() {
             A single view across all your Docker hosts.
           </p>
         </div>
-        {banner && (
-          <div
-            className={
-              banner.type === 'success'
-                ? 'rounded-lg bg-success/10 px-3 py-2 text-xs text-success'
-                : 'rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger'
-            }
-          >
-            {banner.text}
-          </div>
-        )}
+        {bannerEl}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -177,34 +124,8 @@ export default function Dashboard() {
         )}
       </Card>
 
-      <ContainerDetail
-        container={selected}
-        isAdmin={isAdmin}
-        onClose={() => setSelected(null)}
-        onUpdate={(c) => setConfirm(c)}
-        onPin={handlePin}
-      />
-
-      <ConfirmDialog
-        open={!!confirm}
-        onClose={() => setConfirm(null)}
-        onConfirm={handleConfirmUpdate}
-        title="Update container"
-        message={
-          <>
-            Update <span className="font-mono text-foreground">{confirm?.name}</span> from{' '}
-            <span className="font-mono text-foreground">{confirm?.image_tag}</span> to{' '}
-            <span className="font-mono text-foreground">{confirm?.update?.latest_tag}</span>?
-            <br />
-            <span className="text-xs">
-              The image will be pulled and the container recreated with its current configuration.
-            </span>
-          </>
-        }
-        confirmLabel="Update"
-        danger
-        loading={updating}
-      />
+      {detail}
+      {confirmDialog}
     </div>
   )
 }
