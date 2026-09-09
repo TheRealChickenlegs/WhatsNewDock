@@ -44,52 +44,20 @@ type UpdateFilter struct {
 // Servers
 // ---------------------------------------------------------------------------
 
-func (s *Store) ListServers() ([]Server, error) {
-	rows, err := s.db.Query(`SELECT id, name, is_local, status, last_seen, docker_version,
-		os, arch, cpus, memory_bytes, labels, created_at, updated_at FROM servers ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []Server
-	for rows.Next() {
-		var v Server
-		var lastSeen sql.NullString
-		var dockerVer, osName, archName, labelsRaw sql.NullString
-		var createdStr, updatedStr string
-		if err := rows.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
-			&osName, &archName, &v.CPUs, &v.MemoryBytes, &labelsRaw, &createdStr, &updatedStr); err != nil {
-			return nil, err
-		}
-		if lastSeen.Valid {
-			v.LastSeen = parseTS(lastSeen.String)
-		}
-		v.DockerVersion = dockerVer.String
-		v.OS = osName.String
-		v.Arch = archName.String
-		v.Labels = unmarshalList(labelsRaw.String)
-		v.CreatedAt = parseTS(createdStr)
-		v.UpdatedAt = parseTS(updatedStr)
-		out = append(out, v)
-	}
-	return out, rows.Err()
+// scanner abstracts the Scan method shared by *sql.Row and *sql.Rows.
+type scanner interface {
+	Scan(dest ...any) error
 }
 
-func (s *Store) GetServer(id string) (*Server, error) {
-	rows, err := s.db.Query(`SELECT id, name, is_local, status, last_seen, docker_version,
-		os, arch, cpus, memory_bytes, labels, created_at, updated_at FROM servers WHERE id = ?`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	if !rows.Next() {
-		return nil, sql.ErrNoRows
-	}
+const serverColumns = `id, name, is_local, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, created_at, updated_at`
+const serverSelect = `SELECT ` + serverColumns + ` FROM servers`
+
+// scanServer scans a single server row into a Server.
+func scanServer(sc scanner) (*Server, error) {
 	var v Server
 	var lastSeen, dockerVer, osName, archName, labelsRaw sql.NullString
 	var createdStr, updatedStr string
-	if err := rows.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
+	if err := sc.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
 		&osName, &archName, &v.CPUs, &v.MemoryBytes, &labelsRaw, &createdStr, &updatedStr); err != nil {
 		return nil, err
 	}
@@ -103,6 +71,28 @@ func (s *Store) GetServer(id string) (*Server, error) {
 	v.CreatedAt = parseTS(createdStr)
 	v.UpdatedAt = parseTS(updatedStr)
 	return &v, nil
+}
+
+func (s *Store) ListServers() ([]Server, error) {
+	rows, err := s.db.Query(serverSelect + ` ORDER BY name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Server
+	for rows.Next() {
+		v, err := scanServer(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetServer(id string) (*Server, error) {
+	return scanServer(s.db.QueryRow(serverSelect+` WHERE id = ?`, id))
 }
 
 func (s *Store) DeleteServer(id string) error {

@@ -7,29 +7,14 @@ import (
 
 // GetServerByTokenHash looks up a remote server by its hashed agent token.
 func (s *Store) GetServerByTokenHash(hash string) (*Server, error) {
-	row := s.db.QueryRow(`SELECT id, name, is_local, status, last_seen, docker_version,
-		os, arch, cpus, memory_bytes, labels, created_at, updated_at
-		FROM servers WHERE agent_token_hash = ?`, hash)
-	var v Server
-	var lastSeen, dockerVer, osName, archName, labelsRaw sql.NullString
-	var createdStr, updatedStr string
-	if err := row.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
-		&osName, &archName, &v.CPUs, &v.MemoryBytes, &labelsRaw, &createdStr, &updatedStr); err != nil {
+	v, err := scanServer(s.db.QueryRow(serverSelect+` WHERE agent_token_hash = ?`, hash))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	if lastSeen.Valid {
-		v.LastSeen = parseTS(lastSeen.String)
-	}
-	v.DockerVersion = dockerVer.String
-	v.OS = osName.String
-	v.Arch = archName.String
-	v.Labels = unmarshalList(labelsRaw.String)
-	v.CreatedAt = parseTS(createdStr)
-	v.UpdatedAt = parseTS(updatedStr)
-	return &v, nil
+	return v, nil
 }
 
 // CreateServer inserts a new server row (local or remote agent).
