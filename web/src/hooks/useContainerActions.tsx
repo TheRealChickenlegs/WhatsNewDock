@@ -1,13 +1,14 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import type { Container } from '@/lib/types'
+import type { Container, UpdateProgress } from '@/lib/types'
 import ContainerDetail from '@/components/ContainerDetail'
+import UpdateProgressPanel from '@/components/UpdateProgressPanel'
 import { ConfirmDialog } from '@/components/ui'
 
 // useContainerActions encapsulates the update/pin flows shared by the container
-// views: the container detail modal, the update confirmation dialog and the
-// transient feedback banner.
+// views: the container detail modal, the update confirmation dialog, and the
+// feedback (banner + live update progress) surfaces.
 export function useContainerActions(refetch: () => void) {
   const { me } = useAuth()
   const isAdmin = me?.role === 'admin'
@@ -16,6 +17,15 @@ export function useContainerActions(refetch: () => void) {
   const [confirm, setConfirm] = useState<Container | null>(null)
   const [updating, setUpdating] = useState(false)
   const [banner, setBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [progress, setProgress] = useState<UpdateProgress | null>(null)
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (pollRef.current) clearTimeout(pollRef.current)
+    },
+    [],
+  )
 
   const notify = (type: 'success' | 'error', text: string) => {
     setBanner({ type, text })
@@ -37,21 +47,54 @@ export function useContainerActions(refetch: () => void) {
 
   const requestUpdate = useCallback((c: Container) => setConfirm(c), [])
 
+  const pollUpdateStatus = useCallback(
+    (id: string) => {
+      const tick = async () => {
+        let terminal = false
+        try {
+          const job = await api.get<UpdateProgress>(`/api/v1/containers/${id}/update/status`)
+          setProgress(job)
+          if (job.status === 'done' || job.status === 'failed') {
+            terminal = true
+            if (job.status === 'done') {
+              setTimeout(() => setProgress(null), 5000)
+            }
+            refetch()
+          }
+        } catch {
+          setProgress(null)
+          terminal = true
+        }
+        if (!terminal) {
+          pollRef.current = setTimeout(tick, 1000)
+        }
+      }
+      tick()
+    },
+    [refetch],
+  )
+
   const confirmUpdate = useCallback(async () => {
     if (!confirm) return
     setUpdating(true)
     try {
       await api.post(`/api/v1/containers/${confirm.id}/update`)
-      notify('success', `Update queued for ${confirm.name}`)
       setConfirm(null)
-      setTimeout(refetch, 1500)
+      setProgress({
+        container_id: confirm.id,
+        name: confirm.name,
+        status: 'queued',
+        progress: -1,
+        message: 'Queued',
+      })
+      pollUpdateStatus(confirm.id)
     } catch (e) {
       notify('error', e instanceof Error ? e.message : 'Update failed')
       setConfirm(null)
     } finally {
       setUpdating(false)
     }
-  }, [confirm, refetch])
+  }, [confirm, refetch, pollUpdateStatus])
 
   const bannerEl = banner ? (
     <div
@@ -62,6 +105,17 @@ export function useContainerActions(refetch: () => void) {
       }
     >
       {banner.text}
+    </div>
+  ) : null
+
+  const progressEl = progress ? (
+    <UpdateProgressPanel job={progress} onDismiss={() => setProgress(null)} />
+  ) : null
+
+  const feedbackEl = bannerEl || progressEl ? (
+    <div className="flex flex-col items-end gap-2">
+      {bannerEl}
+      {progressEl}
     </div>
   ) : null
 
@@ -98,5 +152,5 @@ export function useContainerActions(refetch: () => void) {
     />
   )
 
-  return { isAdmin, bannerEl, selected, setSelected, requestUpdate, pin, detail, confirmDialog }
+  return { isAdmin, feedbackEl, selected, setSelected, requestUpdate, pin, detail, confirmDialog }
 }

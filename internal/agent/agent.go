@@ -109,7 +109,7 @@ func (a *Agent) execute(ctx context.Context, cmd protocol.Command) error {
 	var res protocol.CommandResult
 	switch cmd.Kind {
 	case "update":
-		if err := a.docker.RecreateContainer(ctx, cmd.ContainerID, cmd.TargetImage); err != nil {
+		if err := a.docker.RecreateContainer(ctx, cmd.ContainerID, cmd.TargetImage, nil); err != nil {
 			res = protocol.CommandResult{Status: "failed", Message: err.Error()}
 		} else {
 			res = protocol.CommandResult{Status: "done", Message: "container recreated with " + cmd.TargetImage}

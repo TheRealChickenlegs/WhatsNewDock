@@ -116,6 +116,14 @@ export interface AuditEvent {
   message: string
 }
 
+export interface UpdateProgress {
+  container_id: string
+  name: string
+  status: string // queued | pulling | recreating | done | failed
+  progress: number // 0-100, or -1 when indeterminate
+  message: string
+}
+
 export interface Settings {
   changelog_count: number
   include_prereleases: boolean

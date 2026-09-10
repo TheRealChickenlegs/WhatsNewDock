@@ -17,6 +17,14 @@ func (s *Store) GetServerByTokenHash(hash string) (*Server, error) {
 	return v, nil
 }
 
+// ContainerIDByDockerID returns the WhatsNewDock container id for a given
+// server and docker container id, or sql.ErrNoRows when not found.
+func (s *Store) ContainerIDByDockerID(serverID, dockerID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT id FROM containers WHERE server_id = ? AND docker_id = ?`, serverID, dockerID).Scan(&id)
+	return id, err
+}
+
 // CreateServer inserts a new server row (local or remote agent).
 func (s *Store) CreateServer(srv *Server) error {
 	if srv.ID == "" {

@@ -125,9 +125,11 @@ func (s *Server) handleAgentCommandResult(w http.ResponseWriter, r *http.Request
 		return
 	}
 	owned := false
+	dockerID := ""
 	for _, c := range cmds {
 		if c.ID == id {
 			owned = true
+			dockerID = c.ContainerID
 			break
 		}
 	}
@@ -143,6 +145,14 @@ func (s *Server) handleAgentCommandResult(w http.ResponseWriter, r *http.Request
 		_ = s.st.AddEvent(s.eventNow("update_done", "agent", srv.ID, "", res.Message))
 	} else {
 		_ = s.st.AddEvent(s.eventNow("update_failed", "agent", srv.ID, "", res.Message))
+	}
+	// Update the in-memory job so the UI can surface completion.
+	if cid, err := s.st.ContainerIDByDockerID(srv.ID, dockerID); err == nil {
+		if status == "done" {
+			s.jobs.set(cid, &updateJob{ContainerID: cid, Status: jobDone, Progress: 100, Message: "Update complete"})
+		} else {
+			s.jobs.set(cid, &updateJob{ContainerID: cid, Status: jobFailed, Progress: -1, Message: res.Message})
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

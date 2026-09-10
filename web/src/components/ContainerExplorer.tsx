@@ -55,7 +55,7 @@ export default function ContainerExplorer({
     [stacks, server],
   )
 
-  const { isAdmin, bannerEl, selected, setSelected, requestUpdate, pin, detail, confirmDialog } =
+  const { isAdmin, feedbackEl, selected, setSelected, requestUpdate, pin, detail, confirmDialog } =
     useContainerActions(refetch)
 
   const list = containers || []
@@ -67,7 +67,7 @@ export default function ContainerExplorer({
           <h1 className="text-xl font-semibold text-foreground">{title}</h1>
           {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
         </div>
-        {bannerEl}
+        {feedbackEl}
       </div>
 
       {showFilters && (

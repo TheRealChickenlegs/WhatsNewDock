@@ -38,6 +38,7 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/v1/containers/{id}", s.requireSession(http.HandlerFunc(s.handleGetContainer)))
 	mux.Handle("GET /api/v1/containers/{id}/releases", s.requireSession(http.HandlerFunc(s.handleContainerReleases)))
 	mux.Handle("POST /api/v1/containers/{id}/update", s.requireAdmin(http.HandlerFunc(s.handleRequestUpdate)))
+	mux.Handle("GET /api/v1/containers/{id}/update/status", s.requireSession(http.HandlerFunc(s.handleUpdateStatus)))
 	mux.Handle("POST /api/v1/containers/{id}/pin", s.requireAdmin(http.HandlerFunc(s.handleSetPin)))
 	mux.Handle("GET /api/v1/updates", s.requireSession(http.HandlerFunc(s.handleListUpdates)))
 

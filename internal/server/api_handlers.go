@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
@@ -305,13 +306,28 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "local docker client unavailable")
 			return
 		}
+		s.jobs.set(c.ID, &updateJob{ContainerID: c.ID, Name: c.Name, Status: jobQueued, Progress: -1, Message: "Queued"})
 		go func() {
-			ctx := r.Context()
-			err := s.docker.RecreateContainer(ctx, c.DockerID, target)
+			// Use a fresh context: the request context is cancelled as soon as
+			// this handler returns, which would abort the update.
+			ctx := context.Background()
+			err := s.docker.RecreateContainer(ctx, c.DockerID, target, func(stage string, percent int) {
+				job := &updateJob{ContainerID: c.ID, Name: c.Name, Progress: percent}
+				if stage == "pulling" {
+					job.Status = jobPulling
+					job.Message = "Pulling image…"
+				} else {
+					job.Status = jobRecreating
+					job.Message = "Recreating container…"
+				}
+				s.jobs.set(c.ID, job)
+			})
 			if err != nil {
+				s.jobs.set(c.ID, &updateJob{ContainerID: c.ID, Name: c.Name, Status: jobFailed, Progress: -1, Message: err.Error()})
 				_ = s.st.AddEvent(s.eventNow("update_failed", actor, c.ServerID, c.ID, c.Name+" -> "+target+": "+err.Error()))
 				return
 			}
+			s.jobs.set(c.ID, &updateJob{ContainerID: c.ID, Name: c.Name, Status: jobDone, Progress: 100, Message: "Update complete"})
 			_ = s.st.AddEvent(s.eventNow("update_done", actor, c.ServerID, c.ID, c.Name+" updated to "+target))
 		}()
 		_ = s.st.AddEvent(s.eventNow("update_requested", actor, c.ServerID, c.ID, c.Name+" -> "+target))
@@ -319,7 +335,8 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remote agent: enqueue a command.
+	// Remote agent: enqueue a command and track it as a queued job.
+	s.jobs.set(c.ID, &updateJob{ContainerID: c.ID, Name: c.Name, Status: jobQueued, Progress: -1, Message: "Queued"})
 	cmd := &store.Command{
 		ServerID:    c.ServerID,
 		Kind:        "update",

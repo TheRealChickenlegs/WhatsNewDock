@@ -44,6 +44,7 @@ type Server struct {
 	handler        http.Handler
 	trustedProxies []*net.IPNet
 	loginLimiter   *loginLimiter
+	jobs           *jobTracker
 }
 
 // New builds a server, opening storage and wiring dependencies.
@@ -90,6 +91,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		version:        version,
 		trustedProxies: parseTrustedCIDRs(cfg.TrustedProxies),
 		loginLimiter:   newLoginLimiter(),
+		jobs:           newJobTracker(),
 	}
 
 	if err := s.bootstrap(); err != nil {

@@ -33,7 +33,7 @@ function StatCard({
 export default function Dashboard() {
   const { data: overview, loading } = useFetch<Overview>('/api/v1/overview', 15000)
   const { data: updates, refetch } = useFetch<Container[]>('/api/v1/updates', 30000)
-  const { bannerEl, setSelected, detail, confirmDialog } = useContainerActions(refetch)
+  const { feedbackEl, setSelected, detail, confirmDialog } = useContainerActions(refetch)
 
   if (loading && !overview) return <Loading />
 
@@ -48,7 +48,7 @@ export default function Dashboard() {
             A single view across all your Docker hosts.
           </p>
         </div>
-        {bannerEl}
+        {feedbackEl}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">

@@ -7,8 +7,8 @@ package dockerx
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 	"time"
@@ -183,18 +183,22 @@ func formatPorts(ports []container.Port) []string {
 	return out
 }
 
+// ProgressFunc reports update progress. stage is "pulling" (percent 0-100) or
+// "recreating" (percent -1, indeterminate).
+type ProgressFunc func(stage string, percent int)
+
 // RecreateContainer pulls a target image and recreates the container against
 // it, preserving the original configuration and keeping the old container as
 // a stopped, renamed rollback backup. This mirrors docker-compose semantics
 // using only the Engine API (no shell commands).
-func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage string) error {
+func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage string, progress ProgressFunc) error {
 	insp, err := c.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("inspect container: %w", err)
 	}
 
 	// 1. Pull the target image.
-	if err := c.pullImage(ctx, targetImage); err != nil {
+	if err := c.pullImage(ctx, targetImage, progress); err != nil {
 		return err
 	}
 
@@ -215,6 +219,9 @@ func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage
 	}
 
 	// 5. Create the replacement.
+	if progress != nil {
+		progress("recreating", -1)
+	}
 	netConfig := buildNetworkingConfig(insp.NetworkSettings)
 	created, err := c.cli.ContainerCreate(ctx, &newConfig, insp.HostConfig, netConfig, nil, insp.Name)
 	if err != nil {
@@ -237,15 +244,73 @@ func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage
 	return nil
 }
 
-func (c *Client) pullImage(ctx context.Context, ref string) error {
+// pullMessage is one JSON progress message from the Docker ImagePull stream.
+type pullMessage struct {
+	ID          string `json:"id"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+	ErrorDetail struct {
+		Message string `json:"message"`
+	} `json:"errorDetail"`
+	ProgressDetail struct {
+		Current int64 `json:"current"`
+		Total   int64 `json:"total"`
+	} `json:"progressDetail"`
+}
+
+// pullImage pulls an image and reports aggregate layer progress (and any pull
+// error embedded in the stream) through the progress callback.
+func (c *Client) pullImage(ctx context.Context, ref string, progress ProgressFunc) error {
 	auth := base64.URLEncoding.EncodeToString([]byte(`{}`))
 	stream, err := c.cli.ImagePull(ctx, ref, image.PullOptions{RegistryAuth: auth})
 	if err != nil {
 		return fmt.Errorf("pull image %s: %w", ref, err)
 	}
 	defer stream.Close()
-	// Drain the progress stream so the pull completes.
-	_, _ = io.Copy(io.Discard, stream)
+
+	layers := map[string][2]int64{}
+	dec := json.NewDecoder(stream)
+	for {
+		var msg pullMessage
+		if err := dec.Decode(&msg); err != nil {
+			// io.EOF (or a stray non-JSON line) — the pull has completed.
+			break
+		}
+		if msg.Error != "" {
+			errMsg := msg.Error
+			if msg.ErrorDetail.Message != "" {
+				errMsg = msg.ErrorDetail.Message
+			}
+			return fmt.Errorf("pull image %s: %s", ref, errMsg)
+		}
+		if msg.ID == "" {
+			continue
+		}
+		l := layers[msg.ID]
+		if msg.ProgressDetail.Total > 0 {
+			l[1] = msg.ProgressDetail.Total
+		}
+		if msg.ProgressDetail.Current > 0 {
+			l[0] = msg.ProgressDetail.Current
+		}
+		layers[msg.ID] = l
+
+		if progress != nil {
+			var cur, tot int64
+			for _, l := range layers {
+				cur += l[0]
+				tot += l[1]
+			}
+			pct := 0
+			if tot > 0 {
+				pct = int(cur * 100 / tot)
+				if pct > 100 {
+					pct = 100
+				}
+			}
+			progress("pulling", pct)
+		}
+	}
 	return nil
 }
 
