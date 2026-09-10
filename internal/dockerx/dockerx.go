@@ -188,9 +188,9 @@ func formatPorts(ports []container.Port) []string {
 type ProgressFunc func(stage string, percent int)
 
 // RecreateContainer pulls a target image and recreates the container against
-// it, preserving the original configuration and keeping the old container as
-// a stopped, renamed rollback backup. This mirrors docker-compose semantics
-// using only the Engine API (no shell commands).
+// it, preserving the original configuration. The old container is removed once
+// the replacement is running (mirroring docker-compose semantics), and restored
+// if the replacement fails to start.
 func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage string, progress ProgressFunc) error {
 	insp, err := c.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
@@ -240,6 +240,9 @@ func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage
 		}
 		return fmt.Errorf("start replacement container: %w", err)
 	}
+
+	// 7. Remove the old container now that the replacement is running.
+	_ = c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 
 	return nil
 }

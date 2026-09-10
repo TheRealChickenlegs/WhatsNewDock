@@ -38,8 +38,8 @@ group_add:
 **No shell commands are ever executed.** Every operation — listing, inspecting,
 pulling and recreating containers — goes through the Docker Engine API client.
 The "update" action recreates a container from its existing configuration
-(never `docker compose`/`docker exec`), and keeps the previous container as a
-stopped rollback backup.
+(never `docker compose`/`docker exec`), and restores the previous container if
+the replacement fails to start.
 
 ## Authentication
 

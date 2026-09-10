@@ -23,8 +23,8 @@ stacks and containers, with one-click image updates.
 - **History** — browse the last **N** releases (default 5, configurable), so you
   can see the changelog of each skipped version.
 - **One-click updates** — recreate a container with the newer image using only
-  the Docker Engine API (no shell commands). The old container is kept as a
-  stopped rollback backup.
+  the Docker Engine API (no shell commands), with live progress and automatic
+  rollback if the replacement fails to start.
 - **Agent architecture** — deploy an agent on every server and view *all*
   servers, stacks and containers in one UI.
 - **Unified & hierarchical views** — filter the unified container list by
