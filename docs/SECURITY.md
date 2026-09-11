@@ -15,25 +15,72 @@ describes the threat model and the protections in place.
 
 ## Docker access — the most important consideration
 
-Access to the Docker socket is **root-equivalent on that host**. The
-recommended hardened deployment is to **not** mount the raw socket and instead
-use a **docker-socket-proxy** that exposes a minimal API surface:
+Access to the raw Docker socket is **root-equivalent on that host**: anything
+that can talk to it can start privileged containers, mount the host filesystem,
+or read every secret on the machine.
 
-- [`Tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
-  (allow `containers`, `images`, `info` — and `start`/`stop`/`create`/`remove`
-  only if you want one-click updates).
-
-Set `WND_DOCKER_HOST=http://socket-proxy:2375`. Alternatively, use TCP with
-mutual TLS (`WND_DOCKER_TLS=1`, `WND_DOCKER_TLS_CA/CERT/KEY`).
-
-If you mount the raw socket anyway, the container user must be a member of the
-host's `docker` group (the socket is `root:docker`, mode `0660`). Grant it with
-a `group_add` directive:
+WhatsNewDock therefore **does not mount the raw socket**. The bundled
+`docker-compose.yml` runs a
+[linuxserver.io socket-proxy](https://docs.linuxserver.io/images/docker-socket-proxy/)
+that exposes only a restricted subset of the Docker API over HTTP on the
+internal compose network. The app talks to the proxy:
 
 ```yaml
-group_add:
-  - "999"   # getent group docker | cut -d: -f3
+WND_DOCKER_HOST: tcp://socket-proxy:2375
 ```
+
+### What the proxy is allowed to do
+
+| Section | Setting | Why |
+| --- | --- | --- |
+| `CONTAINERS` | `1` | list/inspect containers; recreate on update |
+| `INFO` | `1` | daemon version, OS, arch, resources |
+| `IMAGES` | `1` | pull the updated image |
+| `PING` / `VERSION` | `1` | API version negotiation |
+| `POST` | `1` | required for any write (pull/recreate) |
+| everything else | `0` | `EXEC`, `VOLUMES`, `SWARM`, `SECRETS`, `BUILD`, `NETWORKS`, `PLUGINS`, `SYSTEM`, `EVENTS`, `AUTH`, … |
+
+Everything not listed is denied, so a compromise of the app cannot reach
+`/exec`, container volumes, swarm services, secrets, or the build API even
+though it can recreate containers.
+
+### Monitoring-only (read-only) mode
+
+For the tightest posture, run the proxy with `POST: "0"` and set
+`WND_DOCKER_ENABLE_RECREATE: "false"` on the app. The proxy then rejects every
+non-`GET` request, so the app can read container state but cannot modify
+anything — even if it is fully compromised.
+
+### Rules for the proxy
+
+- **Never publish its port.** `2375` is socket-equivalent for the enabled
+  sections; keep it on the internal compose network and reach it by service
+  name. The bundled compose deliberately has no `ports:` on `socket-proxy`.
+- **Never expose it to a public network** or a shared/untrusted bridge.
+- Mount the real socket into the proxy **read-only** (`:ro`).
+- Put the proxy on the same Docker network as the app only.
+
+### Agent deployments
+
+Each agent host runs its own socket-proxy with the same settings; the agent
+points at `tcp://socket-proxy:2375` instead of mounting the socket. See the
+commented example at the bottom of `docker-compose.yml`.
+
+### Alternatives
+
+- **TCP + mutual TLS** — point `WND_DOCKER_HOST` at a TLS-protected daemon and
+  set `WND_DOCKER_TLS=1` plus `WND_DOCKER_TLS_CA`/`_CERT`/`_KEY`.
+- **Raw socket (not recommended)** — if you must mount
+  `/var/run/docker.sock` directly, the container user must be in the host's
+  `docker` group (the socket is `root:docker`, mode `0660`):
+
+  ```yaml
+  group_add:
+    - "999"   # getent group docker | cut -d: -f3
+  ```
+
+  Note that `:ro` on a socket mount grants no protection — the API is still
+  fully reachable.
 
 **No shell commands are ever executed.** Every operation — listing, inspecting,
 pulling and recreating containers — goes through the Docker Engine API client.

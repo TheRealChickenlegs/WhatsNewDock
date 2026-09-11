@@ -1,19 +1,89 @@
 services:
+  # ---------------------------------------------------------------------------
+  # Docker socket proxy (linuxserver.io)
+  #
+  # WhatsNewDock never touches the raw Docker socket. A restricted proxy on the
+  # internal compose network exposes only the API sections the app needs over
+  # HTTP. Everything else — exec, volumes, swarm, secrets, build, networks —
+  # stays denied, so a compromise of the app cannot reach those endpoints.
+  #
+  # The proxy is roughly socket-equivalent for the sections it does enable, so
+  # its port is deliberately NOT published: it must never be reachable from
+  # outside this compose network.
+  #
+  # See docs/SECURITY.md for the rationale and the full permission list.
+  # ---------------------------------------------------------------------------
+  socket-proxy:
+    image: lscr.io/linuxserver/socket-proxy:latest
+    container_name: whatsnewdock-socket-proxy
+    restart: unless-stopped
+    environment:
+      # --- Read access, used for monitoring --------------------------------
+      CONTAINERS: "1" # list + inspect containers (and their config)
+      INFO: "1" # daemon info: version, OS, arch, CPU/memory
+      PING: "1" # API version negotiation
+      VERSION: "1"
+      # --- Write access ----------------------------------------------------
+      # Required for one-click updates: pulls an image and recreates the
+      # container (stop/rename/create/start/remove).
+      #
+      # For a monitoring-only, read-only deployment set POST: "0" below AND
+      # set WND_DOCKER_ENABLE_RECREATE: "false" on the whatsnewdock service —
+      # then the app cannot modify anything, even if it is compromised.
+      POST: "1"
+      IMAGES: "1" # list/pull images (the pull needs POST: 1 too)
+      # --- Everything else stays disabled (least privilege) ----------------
+      ALLOW_ARCHIVE: "0"
+      ALLOW_CHANGES: "0"
+      ALLOW_EXPORT: "0"
+      ALLOW_LOGS: "0"
+      ALLOW_PAUSE: "0"
+      ALLOW_TOP: "0"
+      ALLOW_UNPAUSE: "0"
+      AUTH: "0"
+      BUILD: "0"
+      COMMIT: "0"
+      CONFIGS: "0"
+      DISTRIBUTION: "0"
+      EVENTS: "0"
+      EXEC: "0"
+      NETWORKS: "0"
+      NODES: "0"
+      PLUGINS: "0"
+      SECRETS: "0"
+      SERVICES: "0"
+      SESSION: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+      TASKS: "0"
+      VOLUMES: "0"
+      LOG_LEVEL: info
+      TZ: Etc/UTC
+    volumes:
+      # The proxy is the only container that sees the socket, mounted read-only.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # No `ports:` on purpose — publishing 2375 would expose a socket-equivalent
+    # endpoint to the host network. Reach it by service name instead.
+    # On SELinux-enforcing hosts (Fedora/RHEL) that deny the socket mount, add:
+    #   security_opt:
+    #     - label=disable
+
   whatsnewdock:
     image: ghcr.io/therealchickenlegs/whatsnewdock:latest
     container_name: whatsnewdock
     restart: unless-stopped
+    depends_on:
+      - socket-proxy
     ports:
       - "8080:8080"
     environment:
       # --- Required: bootstrap credentials for first login -----------------
       WND_INITIAL_ADMIN_USER: admin
       WND_INITIAL_ADMIN_PASSWORD: change-me-please
-      # --- Local Docker monitoring ----------------------------------------
-      # The server monitors the Docker host it runs on when the socket is
-      # mounted. For a read-only/hardened setup, replace the socket mount
-      # with a docker-socket-proxy URL via WND_DOCKER_HOST (see README).
-      WND_DOCKER_HOST: unix:///var/run/docker.sock
+      # --- Docker access, via the socket proxy -----------------------------
+      WND_DOCKER_HOST: tcp://socket-proxy:2375
+      # Set to "false" if the proxy runs with POST: "0" (monitoring only).
+      WND_DOCKER_ENABLE_RECREATE: "true"
       # --- Update checking -------------------------------------------------
       WND_UPDATE_INTERVAL: 6h
       WND_CHANGELOG_COUNT: 5
@@ -28,37 +98,50 @@ services:
       # WND_TRUSTED_PROXIES: 10.0.0.0/8
     volumes:
       - whatsnewdock-data:/data
-      # Mount the Docker socket read-only for local monitoring. Note: access
-      # to the socket is effectively root-equivalent on the host; prefer a
-      # socket proxy (Tecnativa/docker-socket-proxy) in untrusted deployments.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     # The container runs as a non-root user (uid 65532). If you use a bind
     # mount for /data (e.g. `./whatsnewdock:/data`) instead of the named volume
     # above, make that directory writable by uid 65532:
     #   sudo chown -R 65532:65532 ./whatsnewdock
     # ...or run the container as your host user instead:
     #   user: "${UID:-1000}:${GID:-1000}"
-    #
-    # To grant access to the Docker socket, the container user must be in the
-    # host's `docker` group (the socket is owned by root:docker, mode 0660).
-    # Find the group GID with:  getent group docker | cut -d: -f3
-    # then add it as a supplementary group:
-    #   group_add:
-    #     - "${DOCKER_GID}"
 
   # --- Optional: a remote agent (deploy one per extra Docker host) ---------
+  # Each agent host runs its own socket proxy; the agent talks to that proxy
+  # rather than the raw socket. Mirror the socket-proxy service above onto the
+  # remote host (same image and environment) and point the agent at it.
+  #
+  # socket-proxy:
+  #   image: lscr.io/linuxserver/socket-proxy:latest
+  #   container_name: whatsnewdock-socket-proxy
+  #   restart: unless-stopped
+  #   environment:
+  #     CONTAINERS: "1"
+  #     IMAGES: "1"
+  #     INFO: "1"
+  #     PING: "1"
+  #     VERSION: "1"
+  #     POST: "1"
+  #     EXEC: "0"
+  #     NETWORKS: "0"
+  #     VOLUMES: "0"
+  #     SWARM: "0"
+  #     SECRETS: "0"
+  #     BUILD: "0"
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #
   # whatsnewdock-agent:
   #   image: ghcr.io/therealchickenlegs/whatsnewdock:latest
   #   container_name: whatsnewdock-agent
   #   restart: unless-stopped
-  #   command: [] # defaults to server mode; override via env below
+  #   depends_on:
+  #     - socket-proxy
   #   environment:
   #     WND_MODE: agent
   #     WND_AGENT_SERVER_URL: https://whatsnewdock.example.com
   #     WND_AGENT_TOKEN: wnd_xxxx
   #     WND_AGENT_NAME: homelab-nas
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock:ro
+  #     WND_DOCKER_HOST: tcp://socket-proxy:2375
 
 volumes:
   whatsnewdock-data:

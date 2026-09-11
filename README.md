@@ -44,17 +44,23 @@ stacks and containers, with one-click image updates.
                  │            WhatsNewDock Server          │
                  │  (web UI + API + auth + update checker) │
                  └───────▲───────────────────▲─────────────┘
-                         │ HTTPS (bearer)    │ local Docker socket (optional)
-              ┌──────────┴────────┐          │
-              │     Agent          │          │
-              │  (per remote host) │          │
-              └───────────────────┘          │
+                         │ HTTPS (bearer)    │ HTTP (internal network)
+              ┌──────────┴────────┐    ┌─────┴──────────────┐
+              │     Agent          │    │  socket-proxy      │
+              │  (per remote host) │    │  (restricted API)  │
+              └───────────────────┘    └─────────▲──────────┘
+                                                 │ read-only socket mount
+                                          ┌──────┴───────┐
+                                          │ Docker host  │
+                                          └──────────────┘
 ```
 
 - **Server mode** (`WND_MODE=server`, the default) serves the UI/API, runs the
-  update-check scheduler, and *optionally* monitors the local Docker socket.
+  update-check scheduler, and *optionally* monitors the local Docker host —
+  through a **socket-proxy**, never the raw socket.
 - **Agent mode** (`WND_MODE=agent`) snapshots a Docker host and reports it to a
-  server, and executes update commands queued by the server.
+  server, and executes update commands queued by the server. Each agent host
+  runs its own socket-proxy.
 - A single binary (`whatsnewdock`) runs in either mode.
 
 Everything is stored in an embedded **SQLite** database — no external
@@ -68,8 +74,10 @@ databases are required, so the app deploys in total isolation.
 docker compose up -d
 ```
 
-Then open http://localhost:8080 and sign in with the admin credentials you set
-via `WND_INITIAL_ADMIN_USER` / `WND_INITIAL_ADMIN_PASSWORD` (see
+This brings up two containers: **whatsnewdock** and a **socket-proxy** that
+holds the Docker socket read-only and exposes only the restricted API the app
+needs. Then open http://localhost:8080 and sign in with the admin credentials
+you set via `WND_INITIAL_ADMIN_USER` / `WND_INITIAL_ADMIN_PASSWORD` (see
 `docker-compose.yml`). If you don't set a password, a random one is generated
 and printed to the container logs on first run.
 
@@ -78,17 +86,32 @@ and printed to the container logs on first run.
 1. Open the **Servers** page (sidebar) and click **Add server** (admin only).
    Enter a name and create it — the UI shows the **agent token once**, along
    with a ready-made run command. Copy the token.
-2. Run the agent on that host:
+2. On that host, run a **socket-proxy** (so the agent never touches the raw
+   socket — same settings as the server compose):
 
 ```bash
-docker run -d --name whatsnewdock-agent \
+docker run -d --name whatsnewdock-socket-proxy --restart unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e CONTAINERS=1 -e IMAGES=1 -e INFO=1 -e PING=1 -e VERSION=1 -e POST=1 \
+  -e EXEC=0 -e NETWORKS=0 -e VOLUMES=0 -e SWARM=0 -e SECRETS=0 -e BUILD=0 \
+  lscr.io/linuxserver/socket-proxy:latest
+```
+
+3. Run the agent, pointed at the proxy:
+
+```bash
+docker run -d --name whatsnewdock-agent --restart unless-stopped \
+  --link whatsnewdock-socket-proxy:socket-proxy \
   -e WND_MODE=agent \
   -e WND_AGENT_SERVER_URL=https://whatsnewdock.example.com \
   -e WND_AGENT_TOKEN=wnd_xxxx \
   -e WND_AGENT_NAME=homelab-nas \
+  -e WND_DOCKER_HOST=tcp://socket-proxy:2375 \
   ghcr.io/therealchickenlegs/whatsnewdock:latest
 ```
+
+Or use the commented compose example at the bottom of `docker-compose.yml`,
+which is preferable (both services share a compose network).
 
 ---
 
@@ -112,10 +135,10 @@ optional **YAML config file** (`--config /path/to/config.yaml` or
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WND_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker host URI (also `tcp://` or a socket-proxy URL) |
+| `WND_DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker host URI. The bundled compose uses `tcp://socket-proxy:2375`; also accepts a TLS-protected `tcp://` daemon. |
 | `WND_DOCKER_TLS` | `false` | Enable TLS for TCP hosts |
 | `WND_DOCKER_TLS_CA` / `_CERT` / `_KEY` | *(empty)* | TLS material for TCP hosts |
-| `WND_DOCKER_ENABLE_RECREATE` | `true` | Allow one-click container updates |
+| `WND_DOCKER_ENABLE_RECREATE` | `true` | Allow one-click container updates (set `false` for monitoring-only deployments) |
 
 ### Update checking
 
@@ -199,11 +222,13 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full model. Highlights:
 
 - **No shell commands** — all Docker operations use the Engine API client.
 - **Non-root, distroless** runtime image with a read-only-by-default container.
-- **Docker socket exposure** — mounting the socket gives root-equivalent
-  access to that host. For untrusted/hardened deployments, point
-  `WND_DOCKER_HOST` at a **docker-socket-proxy** (e.g.
-  [`Tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy))
-  exposing only the minimal API surface, or use TCP + TLS with client certs.
+- **Docker socket is never mounted into the app.** The bundled compose runs a
+  [linuxserver.io socket-proxy](https://docs.linuxserver.io/images/docker-socket-proxy/)
+  on an internal network and exposes only `containers`, `images`, `info` and
+  version negotiation over `WND_DOCKER_HOST=tcp://socket-proxy:2375`. `exec`,
+  `volumes`, `swarm`, `secrets`, `build` and the rest stay denied, and the
+  proxy's port is never published. Set `POST=0` +
+  `WND_DOCKER_ENABLE_RECREATE=false` for a fully read-only deployment.
 - **Agent auth** — agents authenticate with per-server bearer tokens (stored
   hashed, never plaintext).
 - **Web auth** — bcrypt password hashing, HttpOnly `SameSite` session cookies,
@@ -293,16 +318,26 @@ compose service. The named volume in `docker-compose.yml` already handles this
 automatically.
 
 **`permission denied while trying to connect to the Docker daemon socket`** —
-the container user isn't in the host's `docker` group (the socket is owned by
-`root:docker`, mode `0660`). Grant it with `group_add`:
+only relevant if you bypass the bundled socket-proxy and mount the raw socket
+directly. The container user isn't in the host's `docker` group (the socket is
+owned by `root:docker`, mode `0660`). Grant it with `group_add`:
 
 ```yaml
     group_add:
       - "999"   # getent group docker | cut -d: -f3
 ```
 
-or point `WND_DOCKER_HOST` at a docker-socket-proxy, which sidesteps the
-socket permission entirely and is the hardened option.
+Using the bundled socket-proxy avoids this entirely.
+
+**Docker API errors mentioning `403 Forbidden`** — the socket-proxy is denying
+an endpoint the app needs. Check the `socket-proxy` container logs for the
+denied path, then enable the matching section in its environment (see
+`docs/SECURITY.md` for the list). A monitoring-only deployment with `POST: "0"`
+will reject updates by design.
+
+**Updates fail with `POST` denied** — the proxy is running with `POST: "0"`.
+Either set `POST: "1"` on `socket-proxy`, or set
+`WND_DOCKER_ENABLE_RECREATE: "false"` on the app to run read-only.
 
 ---
 
