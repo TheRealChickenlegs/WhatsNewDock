@@ -27,6 +27,7 @@ func (s *Server) routes() http.Handler {
 
 	// --- Session-protected data API --------------------------------------
 	mux.Handle("GET /api/v1/overview", s.requireSession(http.HandlerFunc(s.handleOverview)))
+	mux.Handle("GET /api/v1/about", s.requireSession(http.HandlerFunc(s.handleAbout)))
 	mux.Handle("GET /api/v1/servers", s.requireSession(http.HandlerFunc(s.handleListServers)))
 	mux.Handle("GET /api/v1/servers/{id}", s.requireSession(http.HandlerFunc(s.handleGetServer)))
 	mux.Handle("POST /api/v1/servers", s.requireAdmin(http.HandlerFunc(s.handleCreateServer)))

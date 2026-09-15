@@ -192,6 +192,14 @@ func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stacks)
 }
 
+// handleAbout reports build/version information for the About page.
+func (s *Server) handleAbout(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":    "WhatsNewDock",
+		"version": s.version,
+	})
+}
+
 func (s *Server) handleListContainers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.ContainerFilter{

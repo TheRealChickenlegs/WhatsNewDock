@@ -11,6 +11,7 @@ import {
   Sun,
   LogOut,
   Container,
+  Info,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
 import { cx } from '@/lib/utils'
@@ -24,6 +25,7 @@ const navItems = [
   { to: '/stacks', label: 'Stacks', icon: Layers, end: false },
   { to: '/events', label: 'Activity', icon: History, end: false },
   { to: '/settings', label: 'Settings', icon: Settings, end: false },
+  { to: '/about', label: 'About', icon: Info, end: false },
 ]
 
 export default function Layout() {

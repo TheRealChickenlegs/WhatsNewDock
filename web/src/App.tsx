@@ -11,6 +11,7 @@ import Stacks from '@/pages/Stacks'
 import Updates from '@/pages/Updates'
 import Settings from '@/pages/Settings'
 import Events from '@/pages/Events'
+import About from '@/pages/About'
 
 function Protected({ children }: { children: JSX.Element }) {
   const { me, loading } = useAuth()
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="updates" element={<Updates />} />
         <Route path="settings" element={<Settings />} />
         <Route path="events" element={<Events />} />
+        <Route path="about" element={<About />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
