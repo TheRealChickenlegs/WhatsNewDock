@@ -113,6 +113,23 @@ docker run -d --name whatsnewdock-agent --restart unless-stopped \
 Or use the commented compose example at the bottom of `docker-compose.yml`,
 which is preferable (both services share a compose network).
 
+### Deploying with Podman Quadlet
+
+The same image and environment variables also run as native systemd services
+via Quadlet. Ready-made units for the server, socket-proxy and agent — with
+rootful and rootless instructions — live in
+[`deploy/quadlet/`](deploy/quadlet/README.md):
+
+```bash
+sudo cp deploy/quadlet/*.network deploy/quadlet/*.volume deploy/quadlet/*.container \
+  /etc/containers/systemd/
+sudo systemctl daemon-reload
+sudo systemctl start whatsnewdock
+```
+
+See [`deploy/quadlet/README.md`](deploy/quadlet/README.md) for secrets files,
+rootless setup, SELinux and volume-ownership notes, and auto-updates.
+
 ---
 
 ## Configuration

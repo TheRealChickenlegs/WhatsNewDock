@@ -1,0 +1,42 @@
+# WhatsNewDock server (web UI + API + update checker + local monitoring).
+#
+# Rootful Podman:  /etc/containers/systemd/whatsnewdock.container
+# Rootless Podman: ~/.config/containers/systemd/whatsnewdock.container
+#                  (and change [Install] WantedBy=default.target)
+[Unit]
+Description=WhatsNewDock
+Documentation=https://github.com/TheRealChickenlegs/WhatsNewDock
+After=network-online.target
+Wants=whatsnewdock-socket-proxy.service
+
+[Container]
+Image=ghcr.io/therealchickenlegs/whatsnewdock:latest
+ContainerName=whatsnewdock
+Network=whatsnewdock.network
+PublishPort=8080:8080
+
+# Persistent data. `:U` takes ownership for the image's non-root user (65532).
+Volume=whatsnewdock-data:/data:U
+
+# Docker access goes through the socket proxy, never the raw socket.
+Environment=WND_DOCKER_HOST=tcp://socket-proxy:2375
+# Set to false when the proxy runs with POST=0 (monitoring only).
+Environment=WND_DOCKER_ENABLE_RECREATE=true
+Environment=WND_UPDATE_INTERVAL=6h
+Environment=WND_CHANGELOG_COUNT=5
+Environment=WND_LOG_LEVEL=info
+
+# Secrets: WND_INITIAL_ADMIN_PASSWORD, WND_OIDC_CLIENT_SECRET,
+# WND_AUTH_SESSION_SECRET, WND_GITHUB_TOKEN. Keep the file root-only (0600);
+# the leading "-" makes it optional.
+EnvironmentFile=-/etc/whatsnewdock.env
+
+# --- Reverse proxy / OIDC (uncomment as needed) -----------------------------
+# Environment=WND_BASE_URL=https://whatsnewdock.example.com
+# Environment=WND_TRUSTED_PROXIES=10.0.0.0/8
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,67 @@
+# WhatsNewDock socket proxy — the only unit that sees the container runtime
+# socket. Exposes a restricted Docker/Podman API over the internal network.
+#
+# Rootful Podman:  /etc/containers/systemd/whatsnewdock-socket-proxy.container
+# Rootless Podman: ~/.config/containers/systemd/whatsnewdock-socket-proxy.container
+#                  (and change the socket path below to %t/podman/podman.sock,
+#                   plus [Install] WantedBy=default.target)
+[Unit]
+Description=WhatsNewDock socket proxy
+After=network-online.target
+
+[Container]
+Image=lscr.io/linuxserver/socket-proxy:latest
+ContainerName=whatsnewdock-socket-proxy
+Network=whatsnewdock.network
+
+# Podman's API socket, mounted read-only. Rootful path shown; for rootless use
+# %t/podman/podman.sock (`systemctl --user enable --now podman.socket` first).
+Volume=/run/podman/podman.sock:/var/run/docker.sock:ro
+
+# --- Read access, used for monitoring ---------------------------------------
+Environment=CONTAINERS=1
+Environment=INFO=1
+Environment=PING=1
+Environment=VERSION=1
+# --- Write access -----------------------------------------------------------
+# Required for one-click updates (pull/stop/create/start/remove). Set POST=0
+# below AND WND_DOCKER_ENABLE_RECREATE=false on the server for read-only mode.
+Environment=POST=1
+Environment=IMAGES=1
+# --- Everything else stays disabled (least privilege) -----------------------
+Environment=ALLOW_ARCHIVE=0
+Environment=ALLOW_CHANGES=0
+Environment=ALLOW_EXPORT=0
+Environment=ALLOW_LOGS=0
+Environment=ALLOW_PAUSE=0
+Environment=ALLOW_TOP=0
+Environment=ALLOW_UNPAUSE=0
+Environment=AUTH=0
+Environment=BUILD=0
+Environment=COMMIT=0
+Environment=CONFIGS=0
+Environment=DISTRIBUTION=0
+Environment=EVENTS=0
+Environment=EXEC=0
+Environment=NETWORKS=0
+Environment=NODES=0
+Environment=PLUGINS=0
+Environment=SECRETS=0
+Environment=SERVICES=0
+Environment=SESSION=0
+Environment=SWARM=0
+Environment=SYSTEM=0
+Environment=TASKS=0
+Environment=VOLUMES=0
+Environment=LOG_LEVEL=info
+Environment=TZ=Etc/UTC
+
+# Allow access to the mounted socket on SELinux-enforcing hosts (Fedora/RHEL).
+# Remove this if your host does not enforce SELinux.
+SecurityLabelDisable=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

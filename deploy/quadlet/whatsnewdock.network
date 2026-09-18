@@ -1,0 +1,5 @@
+# Shared network for the WhatsNewDock containers.
+#
+# Install alongside the .container units (see README.md in this directory).
+[Network]
+NetworkName=whatsnewdock

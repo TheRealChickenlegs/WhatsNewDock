@@ -1,0 +1,34 @@
+# WhatsNewDock agent — deploy this on each additional host you want to monitor
+# (instead of the server unit). It reports outbound to the central server and
+# needs no inbound ports.
+#
+# Rootful Podman:  /etc/containers/systemd/whatsnewdock-agent.container
+# Rootless Podman: ~/.config/containers/systemd/whatsnewdock-agent.container
+#                  (and change [Install] WantedBy=default.target)
+[Unit]
+Description=WhatsNewDock agent
+Documentation=https://github.com/TheRealChickenlegs/WhatsNewDock
+After=network-online.target
+Wants=whatsnewdock-socket-proxy.service
+
+[Container]
+Image=ghcr.io/therealchickenlegs/whatsnewdock:latest
+ContainerName=whatsnewdock-agent
+Network=whatsnewdock.network
+
+# The agent talks to its local socket proxy, not the raw socket.
+Environment=WND_MODE=agent
+Environment=WND_DOCKER_HOST=tcp://socket-proxy:2375
+Environment=WND_LOG_LEVEL=info
+
+# Required agent settings. Keep the file root-only (0600):
+#   WND_AGENT_SERVER_URL=https://whatsnewdock.example.com
+#   WND_AGENT_TOKEN=wnd_xxxx        (shown once when adding the server in the UI)
+#   WND_AGENT_NAME=homelab-nas
+EnvironmentFile=/etc/whatsnewdock-agent.env
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
