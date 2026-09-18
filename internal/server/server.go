@@ -27,6 +27,7 @@ import (
 
 const (
 	localSnapshotInterval = 30 * time.Second
+	snapshotTimeout       = 60 * time.Second
 	offlineMarkInterval   = 60 * time.Second
 	offlineThreshold      = 2 * time.Minute
 )
@@ -37,6 +38,7 @@ type Server struct {
 	st             *store.Store
 	auth           *auth.Manager
 	docker         *dockerx.Client // nil when no local Docker access
+	endpoints      *endpointPool   // Docker clients for agentless direct hosts
 	ch             *changelog.Client
 	updater        *updater.Updater
 	version        string
@@ -86,6 +88,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		st:             st,
 		auth:           authMgr,
 		docker:         docker,
+		endpoints:      newEndpointPool(),
 		ch:             ch,
 		updater:        up,
 		version:        version,
@@ -182,23 +185,26 @@ func (s *Server) Close() error {
 	if s.docker != nil {
 		_ = s.docker.Close()
 	}
+	s.endpoints.closeAll()
 	return s.st.Close()
 }
 
 // Run starts the background loops and the HTTP server until ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	// Mark remote servers offline on startup; agents will report in.
+	// Mark remote servers offline on startup; agents will report in and direct
+	// endpoints will be polled by the snapshot loop below.
 	_ = s.st.MarkAllOffline()
 
 	var wg sync.WaitGroup
 
-	if s.docker != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			s.localSnapshotLoop(ctx)
-		}()
-	}
+	// The snapshot loop always runs: it covers the local host when a Docker
+	// socket is available and any configured direct endpoints. With neither,
+	// it is a no-op and agents keep working exactly as before.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.snapshotLoop(ctx)
+	}()
 
 	wg.Add(1)
 	go func() {
@@ -243,35 +249,86 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 }
 
-func (s *Server) localSnapshotLoop(ctx context.Context) {
+func (s *Server) snapshotLoop(ctx context.Context) {
 	t := time.NewTicker(localSnapshotInterval)
 	defer t.Stop()
-	s.snapshotLocal(ctx)
+	s.snapshotAll(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.snapshotLocal(ctx)
+			s.snapshotAll(ctx)
 		}
 	}
 }
 
+// snapshotAll refreshes every locally-reachable host. A failing endpoint never
+// prevents the others from being refreshed.
+func (s *Server) snapshotAll(ctx context.Context) {
+	if s.docker != nil {
+		s.snapshotLocal(ctx)
+	}
+	servers, err := s.st.ListServersByKind(store.ServerDirect)
+	if err != nil {
+		slog.Error("list direct endpoints failed", "err", err)
+		return
+	}
+	for _, srv := range servers {
+		s.snapshotDirect(ctx, srv)
+	}
+}
+
 func (s *Server) snapshotLocal(ctx context.Context) {
-	snap, err := s.docker.Snapshot(ctx)
+	ctx2, cancel := context.WithTimeout(ctx, snapshotTimeout)
+	defer cancel()
+	snap, err := s.docker.Snapshot(ctx2)
 	if err != nil {
 		slog.Error("local snapshot failed", "err", err)
 		return
 	}
 	snap.Server.ID = s.localID
 	snap.Server.IsLocal = true
+	snap.Server.Kind = store.ServerLocal
 	snap.Server.Status = "online"
 	snap.Server.LastSeen = time.Now().UTC()
+	// Keep an operator-chosen name; otherwise fall back to the daemon's
+	// hostname and finally to "local".
+	if cur, err := s.st.GetServer(s.localID); err == nil && cur.NameCustom {
+		snap.Server.Name = cur.Name
+		snap.Server.NameCustom = true
+	}
 	if snap.Server.Name == "" {
 		snap.Server.Name = "local"
 	}
 	if err := s.st.ReplaceServerSnapshot(&snap.Server, snap.Stacks, snap.Containers); err != nil {
 		slog.Error("persist local snapshot failed", "err", err)
+	}
+}
+
+// snapshotDirect polls one agentless endpoint over the Docker Engine API.
+func (s *Server) snapshotDirect(ctx context.Context, srv store.Server) {
+	dc, err := s.endpoints.get(srv)
+	if err != nil {
+		slog.Warn("direct endpoint unavailable", "server", srv.Name, "err", err)
+		return
+	}
+	ctx2, cancel := context.WithTimeout(ctx, snapshotTimeout)
+	defer cancel()
+	snap, err := dc.Snapshot(ctx2)
+	if err != nil {
+		slog.Warn("direct snapshot failed", "server", srv.Name, "err", err)
+		return
+	}
+	snap.Server.ID = srv.ID
+	snap.Server.Name = srv.Name
+	snap.Server.NameCustom = srv.NameCustom
+	snap.Server.IsLocal = false
+	snap.Server.Kind = store.ServerDirect
+	snap.Server.Status = "online"
+	snap.Server.LastSeen = time.Now().UTC()
+	if err := s.st.ReplaceServerSnapshot(&snap.Server, snap.Stacks, snap.Containers); err != nil {
+		slog.Error("persist direct snapshot failed", "server", srv.Name, "err", err)
 	}
 }
 

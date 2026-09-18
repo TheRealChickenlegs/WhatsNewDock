@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS servers (
 	memory_bytes   INTEGER NOT NULL DEFAULT 0,
 	labels         TEXT NOT NULL DEFAULT '[]',
 	agent_token_hash TEXT,
+	kind           TEXT NOT NULL DEFAULT 'agent',
+	docker_host    TEXT,
+	tls_ca         TEXT,
+	tls_cert       TEXT,
+	tls_key        TEXT,
+	name_custom    INTEGER NOT NULL DEFAULT 0,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL
 );
@@ -86,6 +92,8 @@ CREATE TABLE IF NOT EXISTS containers (
 	labels          TEXT NOT NULL DEFAULT '{}',
 	ports           TEXT NOT NULL DEFAULT '[]',
 	pinned          INTEGER NOT NULL DEFAULT 0,
+	systemd_unit    TEXT,
+	managed         INTEGER NOT NULL DEFAULT 0,
 	updated_at      TEXT NOT NULL,
 	UNIQUE(server_id, docker_id)
 );
@@ -158,11 +166,119 @@ CREATE INDEX IF NOT EXISTS idx_stacks_server     ON stacks(server_id);
 CREATE INDEX IF NOT EXISTS idx_commands_server   ON commands(server_id);
 `
 
+// migration is one additive, idempotent schema step. Steps only ever add
+// missing columns, so an existing database upgrades in place without touching
+// its data.
+type migration struct {
+	version int
+	apply   func(*sql.Tx) error
+}
+
+var migrations = []migration{
+	{
+		version: 1, // agentless direct endpoints
+		apply: func(tx *sql.Tx) error {
+			if err := addColumn(tx, "servers", "kind", `TEXT NOT NULL DEFAULT 'agent'`); err != nil {
+				return err
+			}
+			for _, c := range []string{"docker_host", "tls_ca", "tls_cert", "tls_key"} {
+				if err := addColumn(tx, "servers", c, "TEXT"); err != nil {
+					return err
+				}
+			}
+			// Existing local server row keeps its identity; everything else
+			// stays an agent (the column default).
+			_, err := tx.Exec(`UPDATE servers SET kind = 'local' WHERE is_local = 1`)
+			return err
+		},
+	},
+	{
+		version: 2, // Podman / Quadlet awareness
+		apply: func(tx *sql.Tx) error {
+			if err := addColumn(tx, "containers", "systemd_unit", "TEXT"); err != nil {
+				return err
+			}
+			return addColumn(tx, "containers", "managed", "INTEGER NOT NULL DEFAULT 0")
+		},
+	},
+	{
+		version: 3, // keep user-chosen server names across snapshot reports
+		apply: func(tx *sql.Tx) error {
+			return addColumn(tx, "servers", "name_custom", "INTEGER NOT NULL DEFAULT 0")
+		},
+	},
+}
+
 func (s *Store) migrate() error {
+	// Base schema for new databases (idempotent for existing ones).
 	if _, err := s.db.Exec(schema); err != nil {
-		return fmt.Errorf("migrate: %w", err)
+		return fmt.Errorf("migrate schema: %w", err)
+	}
+	// Versioned additive steps for databases created by older versions.
+	for _, m := range migrations {
+		var done int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, m.version).Scan(&done); err != nil {
+			return fmt.Errorf("check migration %d: %w", m.version, err)
+		}
+		if done > 0 {
+			continue
+		}
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		if err := m.apply(tx); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("migration %d: %w", m.version, err)
+		}
+		if _, err := tx.Exec(`INSERT INTO schema_migrations(version) VALUES(?)`, m.version); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("record migration %d: %w", m.version, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// addColumn adds a column only when missing, so migrations tolerate re-runs and
+// partially-upgraded databases.
+func addColumn(tx *sql.Tx, table, column, definition string) error {
+	exists, err := columnExists(tx, table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = tx.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, definition))
+	return err
+}
+
+func columnExists(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notNull int
+			dflt    sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // --- time helpers -------------------------------------------------------

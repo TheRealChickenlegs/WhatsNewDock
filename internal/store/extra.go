@@ -25,25 +25,63 @@ func (s *Store) ContainerIDByDockerID(serverID, dockerID string) (string, error)
 	return id, err
 }
 
-// CreateServer inserts a new server row (local or remote agent).
+// CreateServer inserts a new server row (local, remote agent or direct
+// endpoint). A direct endpoint's TLS material is stored as mounted file paths,
+// never as inline PEM.
 func (s *Store) CreateServer(srv *Server) error {
 	if srv.ID == "" {
 		srv.ID = newID()
+	}
+	if srv.Kind == "" {
+		if srv.IsLocal {
+			srv.Kind = ServerLocal
+		} else {
+			srv.Kind = ServerAgent
+		}
 	}
 	now := ts(timeNow())
 	if srv.CreatedAt.IsZero() {
 		srv.CreatedAt = parseTS(now)
 	}
-	_, err := s.db.Exec(`INSERT INTO servers(id, name, is_local, status, agent_token_hash, labels, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		srv.ID, srv.Name, boolInt(srv.IsLocal), srv.Status, nullable(srv.AgentTokenHash), marshalList(srv.Labels), now, now)
+	_, err := s.db.Exec(`INSERT INTO servers(id, name, is_local, kind, status, agent_token_hash, docker_host, tls_ca, tls_cert, tls_key, name_custom, labels, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		srv.ID, srv.Name, boolInt(srv.IsLocal), string(srv.Kind), srv.Status,
+		nullable(srv.AgentTokenHash), nullable(srv.DockerHost), nullable(srv.TLSCA), nullable(srv.TLSCert), nullable(srv.TLSKey),
+		boolInt(srv.NameCustom), marshalList(srv.Labels), now, now)
 	return err
 }
 
-// UpdateServerName renames a server.
+// UpdateServerName renames a server and marks the name as operator-chosen, so
+// later snapshot reports cannot overwrite it.
 func (s *Store) UpdateServerName(id, name string) error {
-	_, err := s.db.Exec(`UPDATE servers SET name = ? WHERE id = ?`, name, id)
+	_, err := s.db.Exec(`UPDATE servers SET name = ?, name_custom = 1, updated_at = ? WHERE id = ?`, name, ts(timeNow()), id)
 	return err
+}
+
+// UpdateServerEndpoint rewrites a direct endpoint's connection settings. It is
+// only meaningful for servers of kind 'direct'.
+func (s *Store) UpdateServerEndpoint(id, dockerHost, ca, cert, key string) error {
+	_, err := s.db.Exec(`UPDATE servers SET docker_host = ?, tls_ca = ?, tls_cert = ?, tls_key = ?, updated_at = ? WHERE id = ?`,
+		nullable(dockerHost), nullable(ca), nullable(cert), nullable(key), ts(timeNow()), id)
+	return err
+}
+
+// ListServersByKind returns every server of the given kind, ordered by name.
+func (s *Store) ListServersByKind(kind ServerKind) ([]Server, error) {
+	rows, err := s.db.Query(serverSelect+` WHERE kind = ? ORDER BY name`, string(kind))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Server
+	for rows.Next() {
+		v, err := scanServer(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *v)
+	}
+	return out, rows.Err()
 }
 
 // MarkServerOffline flips a server's status to offline.

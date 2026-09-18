@@ -140,12 +140,20 @@ func (c *Client) Snapshot(ctx context.Context) (*Snapshot, error) {
 		}
 
 		// Determine stack membership.
-		if ns := ctr.Labels["com.docker.stack.namespace"]; ns != "" {
-			c.StackName = ns
-			stackSet[ns] = store.StackSwarm
-		} else if proj := ctr.Labels["com.docker.compose.project"]; proj != "" {
-			c.StackName = proj
-			stackSet[proj] = store.StackCompose
+		if name, kind := containerStack(ctr.Labels); name != "" {
+			c.StackName = name
+			stackSet[name] = kind
+		}
+
+		// Podman records the owning systemd unit on containers it manages
+		// through Quadlet. Recreating such a container by hand would leave the
+		// unit out of sync with reality, so mark it managed and refuse
+		// one-click updates for it. Containers without this label — every
+		// Docker container, and Podman containers started by hand — are
+		// unaffected.
+		if unit := podmanSystemdUnit(ctr.Labels); unit != "" {
+			c.SystemdUnit = unit
+			c.Managed = true
 		}
 
 		snap.Containers = append(snap.Containers, &c)
@@ -162,6 +170,30 @@ func (c *Client) Snapshot(ctx context.Context) (*Snapshot, error) {
 	}
 
 	return snap, nil
+}
+
+// containerStack resolves which group a container belongs to. Docker's swarm
+// and compose labels keep priority; Podman's Kubernetes pod label is only a
+// fallback, so grouping on Docker hosts is completely unchanged.
+func containerStack(labels map[string]string) (string, store.StackKind) {
+	if ns := labels["com.docker.stack.namespace"]; ns != "" {
+		return ns, store.StackSwarm
+	}
+	if proj := labels["com.docker.compose.project"]; proj != "" {
+		return proj, store.StackCompose
+	}
+	// Podman sets the pod name for containers created by `podman kube play`.
+	if pod := labels["io.kubernetes.pod.name"]; pod != "" {
+		return pod, store.StackPod
+	}
+	return "", ""
+}
+
+// podmanSystemdUnit returns the systemd unit that owns a Podman container, or
+// "" when the container is not systemd-managed. Podman sets this label for
+// containers generated from Quadlet units; no Docker container ever carries it.
+func podmanSystemdUnit(labels map[string]string) string {
+	return labels["PODMAN_SYSTEMD_UNIT"]
 }
 
 func formatPorts(ports []container.Port) []string {

@@ -6,6 +6,8 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
+
+	"github.com/whatsnewdock/whatsnewdock/internal/store"
 )
 
 func TestFormatPorts(t *testing.T) {
@@ -51,5 +53,66 @@ func TestBuildNetworkingConfigNil(t *testing.T) {
 	}
 	if buildNetworkingConfig(&types.NetworkSettings{}) != nil {
 		t.Error("expected nil for empty settings")
+	}
+}
+
+// TestContainerStack pins grouping precedence: Docker's own labels always win,
+// and Podman pods are only a fallback.
+func TestContainerStack(t *testing.T) {
+	cases := []struct {
+		name     string
+		labels   map[string]string
+		wantName string
+		wantKind store.StackKind
+	}{
+		{name: "none", labels: map[string]string{}, wantName: ""},
+		{
+			name:     "compose",
+			labels:   map[string]string{"com.docker.compose.project": "web"},
+			wantName: "web", wantKind: store.StackCompose,
+		},
+		{
+			name:     "swarm",
+			labels:   map[string]string{"com.docker.stack.namespace": "prod", "com.docker.compose.project": "web"},
+			wantName: "prod", wantKind: store.StackSwarm,
+		},
+		{
+			// A Quadlet container joined to a compose project must not be
+			// regrouped by the pod fallback.
+			name: "compose wins over pod",
+			labels: map[string]string{
+				"com.docker.compose.project": "web",
+				"io.kubernetes.pod.name":     "mypod",
+			},
+			wantName: "web", wantKind: store.StackCompose,
+		},
+		{
+			name:     "pod fallback",
+			labels:   map[string]string{"io.kubernetes.pod.name": "mypod"},
+			wantName: "mypod", wantKind: store.StackPod,
+		},
+	}
+	for _, c := range cases {
+		gotName, gotKind := containerStack(c.labels)
+		if gotName != c.wantName || (gotName != "" && gotKind != c.wantKind) {
+			t.Errorf("%s: got (%q, %q), want (%q, %q)", c.name, gotName, gotKind, c.wantName, c.wantKind)
+		}
+	}
+}
+
+// TestQuadletManagedDetection documents the exact label that gates one-click
+// updates, and that its absence leaves a container updatable.
+func TestQuadletManagedDetection(t *testing.T) {
+	// A compose container on a Docker host: never managed.
+	if unit := podmanSystemdUnit(map[string]string{"com.docker.compose.project": "web"}); unit != "" {
+		t.Errorf("docker container reported as systemd-managed: %q", unit)
+	}
+	// A Podman container started by hand on a Podman host: also not managed.
+	if unit := podmanSystemdUnit(map[string]string{"io.containers.autoupdate": "registry"}); unit != "" {
+		t.Errorf("autoupdate-only container reported as systemd-managed: %q", unit)
+	}
+	// A Quadlet unit's container: managed.
+	if unit := podmanSystemdUnit(map[string]string{"PODMAN_SYSTEMD_UNIT": "web.service"}); unit != "web.service" {
+		t.Errorf("quadlet unit not detected: %q", unit)
 	}
 }

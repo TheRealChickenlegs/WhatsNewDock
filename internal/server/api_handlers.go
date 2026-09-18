@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/whatsnewdock/whatsnewdock/internal/config"
+	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
 	"github.com/whatsnewdock/whatsnewdock/internal/server/auth"
 	"github.com/whatsnewdock/whatsnewdock/internal/store"
 )
@@ -19,6 +22,40 @@ func effectiveOnline(srv store.Server) bool {
 		return true
 	}
 	return srv.Status == "online" && time.Since(srv.LastSeen) <= offlineThreshold
+}
+
+// executorFor returns the Docker client that can run an update for a server, or
+// nil when the update has to be delegated to a remote agent. Only the local host
+// and direct endpoints are reachable from this process.
+func (s *Server) executorFor(srv *store.Server) (*dockerx.Client, error) {
+	if srv.IsLocal {
+		if s.docker == nil {
+			return nil, errors.New("local docker client unavailable")
+		}
+		return s.docker, nil
+	}
+	if srv.Kind == store.ServerDirect {
+		return s.endpoints.get(*srv)
+	}
+	// Everything else is an agent: the update is queued as a command. This is
+	// the pre-existing path and must stay the default.
+	return nil, nil
+}
+
+// updateBlockedReason explains why a container must not be recreated by us, or
+// returns "" when the update may proceed. Only containers the runtime itself
+// reports as systemd-managed (Podman Quadlet) are blocked, so Docker hosts and
+// hand-started Podman containers are unaffected.
+func updateBlockedReason(c *store.ContainerWithUpdate) string {
+	if !c.Managed {
+		return ""
+	}
+	unit := c.SystemdUnit
+	if unit == "" {
+		unit = "its systemd unit"
+	}
+	return "this container is managed by " + unit + "; update it with `podman auto-update` or by " +
+		"editing the Quadlet unit and running `systemctl daemon-reload`, not by recreating the container"
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -88,10 +125,11 @@ func (s *Server) handleGetServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func serverJSON(srv store.Server) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id":             srv.ID,
 		"name":           srv.Name,
 		"is_local":       srv.IsLocal,
+		"kind":           string(srv.Kind),
 		"online":         effectiveOnline(srv),
 		"last_seen":      srv.LastSeen,
 		"docker_version": srv.DockerVersion,
@@ -101,10 +139,24 @@ func serverJSON(srv store.Server) map[string]any {
 		"memory_bytes":   srv.MemoryBytes,
 		"labels":         srv.Labels,
 	}
+	// Only direct endpoints expose connection details; TLS material is never
+	// returned (it is referenced by file path on the host).
+	if srv.Kind == store.ServerDirect {
+		out["docker_host"] = srv.DockerHost
+		out["tls"] = srv.TLSEnabled()
+	}
+	return out
 }
 
 type createServerRequest struct {
 	Name string `json:"name"`
+	// Kind selects how the host is reached: "agent" (default) or "direct".
+	Kind string `json:"kind"`
+	// Direct-endpoint settings. TLS material is a file path on the server host.
+	DockerHost string `json:"docker_host"`
+	TLSCA      string `json:"tls_ca"`
+	TLSCert    string `json:"tls_cert"`
+	TLSKey     string `json:"tls_key"`
 }
 
 func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
@@ -118,10 +170,50 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	u := s.currentUser(r)
+	actor := ""
+	if u != nil {
+		actor = u.Username
+	}
+
+	if req.Kind == string(store.ServerDirect) {
+		spec, err := validateEndpoint(req.DockerHost, req.TLSCA, req.TLSCert, req.TLSKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		srv := &store.Server{
+			Name:       req.Name,
+			IsLocal:    false,
+			Kind:       store.ServerDirect,
+			Status:     "offline",
+			DockerHost: spec.Host,
+			TLSCA:      spec.TLSCA,
+			TLSCert:    spec.TLSCert,
+			TLSKey:     spec.TLSKey,
+			NameCustom: true,
+		}
+		if err := s.st.CreateServer(srv); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Prime the endpoint immediately so the new card shows real data.
+		go s.snapshotDirect(context.Background(), *srv)
+		_ = s.st.AddEvent(s.eventNow("server_added", actor, srv.ID, "", "added direct endpoint "+req.Name+" ("+spec.Host+")"))
+		writeJSON(w, http.StatusOK, map[string]any{"id": srv.ID, "name": srv.Name, "kind": string(store.ServerDirect)})
+		return
+	}
+
+	if req.Kind != "" && req.Kind != string(store.ServerAgent) {
+		writeError(w, http.StatusBadRequest, "kind must be \"agent\" or \"direct\"")
+		return
+	}
+
 	token := randomToken()
 	srv := &store.Server{
 		Name:           req.Name,
 		IsLocal:        false,
+		Kind:           store.ServerAgent,
 		Status:         "offline",
 		AgentTokenHash: auth.HashToken(token),
 	}
@@ -129,13 +221,8 @@ func (s *Server) handleCreateServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	u := s.currentUser(r)
-	actor := ""
-	if u != nil {
-		actor = u.Username
-	}
 	_ = s.st.AddEvent(s.eventNow("server_added", actor, srv.ID, "", "added server "+req.Name))
-	writeJSON(w, http.StatusOK, map[string]any{"id": srv.ID, "name": srv.Name, "token": token})
+	writeJSON(w, http.StatusOK, map[string]any{"id": srv.ID, "name": srv.Name, "kind": string(store.ServerAgent), "token": token})
 }
 
 func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
@@ -149,11 +236,126 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if err := s.st.UpdateServerName(r.PathValue("id"), req.Name); err != nil {
+	id := r.PathValue("id")
+	srv, err := s.st.GetServer(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "server not found")
+		return
+	}
+	if err := s.st.UpdateServerName(id, req.Name); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	srv.Name = req.Name
+	srv.NameCustom = true
+
+	// A direct endpoint may also have its connection settings rewritten. An
+	// omitted docker_host leaves the existing endpoint untouched.
+	if srv.Kind == store.ServerDirect && strings.TrimSpace(req.DockerHost) != "" {
+		spec, err := validateEndpoint(req.DockerHost, req.TLSCA, req.TLSCert, req.TLSKey)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := s.st.UpdateServerEndpoint(id, spec.Host, spec.TLSCA, spec.TLSCert, spec.TLSKey); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		// Drop the cached client so the new settings take effect at once.
+		s.endpoints.forget(id)
+		srv.DockerHost, srv.TLSCA, srv.TLSCert, srv.TLSKey = spec.Host, spec.TLSCA, spec.TLSCert, spec.TLSKey
+		go s.snapshotDirect(context.Background(), *srv)
+	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+type testEndpointRequest struct {
+	DockerHost string `json:"docker_host"`
+	TLSCA      string `json:"tls_ca"`
+	TLSCert    string `json:"tls_cert"`
+	TLSKey     string `json:"tls_key"`
+}
+
+// handleTestEndpoint validates Docker API connectivity for a direct endpoint,
+// either from the request body (before saving) or from a stored server row with
+// per-field overrides.
+func (s *Server) handleTestEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req testEndpointRequest
+	if r.ContentLength > 0 {
+		if err := readJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid body")
+			return
+		}
+	}
+	if id := r.PathValue("id"); id != "" {
+		srv, err := s.st.GetServer(id)
+		if err != nil {
+			writeError(w, http.StatusNotFound, "server not found")
+			return
+		}
+		if srv.IsLocal {
+			if s.docker == nil {
+				writeError(w, http.StatusServiceUnavailable, "local docker client unavailable")
+				return
+			}
+			s.reportEndpointCheck(w, r, s.docker)
+			return
+		}
+		if srv.Kind != store.ServerDirect {
+			writeError(w, http.StatusBadRequest, "only direct endpoints can be tested")
+			return
+		}
+		if strings.TrimSpace(req.DockerHost) == "" {
+			req.DockerHost = srv.DockerHost
+		}
+		if strings.TrimSpace(req.TLSCA) == "" {
+			req.TLSCA = srv.TLSCA
+		}
+		if strings.TrimSpace(req.TLSCert) == "" {
+			req.TLSCert = srv.TLSCert
+		}
+		if strings.TrimSpace(req.TLSKey) == "" {
+			req.TLSKey = srv.TLSKey
+		}
+	}
+	spec, err := validateEndpoint(req.DockerHost, req.TLSCA, req.TLSCert, req.TLSKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	dc, err := dockerx.New(config.DockerConfig{
+		Host: spec.Host, TLS: spec.TLSEnabled(),
+		TLSCA: spec.TLSCA, TLSCert: spec.TLSCert, TLSKey: spec.TLSKey,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	defer func() { _ = dc.Close() }()
+	s.reportEndpointCheck(w, r, dc)
+}
+
+func (s *Server) reportEndpointCheck(w http.ResponseWriter, r *http.Request, dc *dockerx.Client) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := dc.Ping(ctx); err != nil {
+		writeError(w, http.StatusBadGateway, "could not reach the Docker API: "+err.Error())
+		return
+	}
+	info, err := dc.Info(ctx)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "connected, but reading host info failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"name":           info.Name,
+		"docker_version": info.DockerVersion,
+		"os":             info.OS,
+		"arch":           info.Arch,
+		"cpus":           info.CPUs,
+		"memory_bytes":   info.MemoryBytes,
+	})
 }
 
 func (s *Server) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +373,7 @@ func (s *Server) handleDeleteServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.endpoints.forget(id)
 	u := s.currentUser(r)
 	actor := ""
 	if u != nil {
@@ -309,17 +512,29 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 		actor = u.Username
 	}
 
-	if srv.IsLocal {
-		if s.docker == nil {
-			writeError(w, http.StatusInternalServerError, "local docker client unavailable")
-			return
-		}
+	// A container that belongs to a systemd unit (Podman Quadlet) must be
+	// updated through that unit: recreating it behind systemd's back leaves the
+	// unit tracking a container that no longer exists.
+	if reason := updateBlockedReason(c); reason != "" {
+		writeError(w, http.StatusConflict, reason)
+		return
+	}
+
+	// Direct endpoints are polled by this server, so updates run here exactly
+	// like local ones. Anything else is an agent and stays on the command queue.
+	exec, err := s.executorFor(srv)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "endpoint unavailable: "+err.Error())
+		return
+	}
+
+	if exec != nil {
 		s.jobs.set(c.ID, &updateJob{ContainerID: c.ID, Name: c.Name, Status: jobQueued, Progress: -1, Message: "Queued"})
 		go func() {
 			// Use a fresh context: the request context is cancelled as soon as
 			// this handler returns, which would abort the update.
 			ctx := context.Background()
-			err := s.docker.RecreateContainer(ctx, c.DockerID, target, func(stage string, percent int) {
+			err := exec.RecreateContainer(ctx, c.DockerID, target, func(stage string, percent int) {
 				job := &updateJob{ContainerID: c.ID, Name: c.Name, Progress: percent}
 				if stage == "pulling" {
 					job.Status = jobPulling
@@ -339,7 +554,7 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 			_ = s.st.AddEvent(s.eventNow("update_done", actor, c.ServerID, c.ID, c.Name+" updated to "+target))
 		}()
 		_ = s.st.AddEvent(s.eventNow("update_requested", actor, c.ServerID, c.ID, c.Name+" -> "+target))
-		writeJSON(w, http.StatusOK, map[string]any{"queued": true, "local": true})
+		writeJSON(w, http.StatusOK, map[string]any{"queued": true, "local": srv.IsLocal, "direct": srv.Kind == store.ServerDirect})
 		return
 	}
 

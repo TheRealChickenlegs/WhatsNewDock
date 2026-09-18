@@ -31,6 +31,10 @@ func (s *Server) routes() http.Handler {
 	mux.Handle("GET /api/v1/servers", s.requireSession(http.HandlerFunc(s.handleListServers)))
 	mux.Handle("GET /api/v1/servers/{id}", s.requireSession(http.HandlerFunc(s.handleGetServer)))
 	mux.Handle("POST /api/v1/servers", s.requireAdmin(http.HandlerFunc(s.handleCreateServer)))
+	// Also accepts settings that have not been saved yet, so the UI can verify
+	// an endpoint before creating it.
+	mux.Handle("POST /api/v1/servers/test", s.requireAdmin(http.HandlerFunc(s.handleTestEndpoint)))
+	mux.Handle("POST /api/v1/servers/{id}/test", s.requireAdmin(http.HandlerFunc(s.handleTestEndpoint)))
 	mux.Handle("PATCH /api/v1/servers/{id}", s.requireAdmin(http.HandlerFunc(s.handleUpdateServer)))
 	mux.Handle("DELETE /api/v1/servers/{id}", s.requireAdmin(http.HandlerFunc(s.handleDeleteServer)))
 

@@ -3,22 +3,49 @@ package store
 
 import "time"
 
-// Server represents a monitored Docker host (local or remote agent).
+// ServerKind describes how a server is reached.
+type ServerKind string
+
+const (
+	// ServerLocal is the Docker host this instance runs on.
+	ServerLocal ServerKind = "local"
+	// ServerAgent is a remote host that reports in with a token.
+	ServerAgent ServerKind = "agent"
+	// ServerDirect is a remote host polled directly over the Docker API.
+	ServerDirect ServerKind = "direct"
+)
+
+// Server represents a monitored Docker host (local, agent or direct endpoint).
 type Server struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	IsLocal        bool      `json:"is_local"`
-	Status         string    `json:"status"` // "online" | "offline"
-	LastSeen       time.Time `json:"last_seen"`
-	DockerVersion  string    `json:"docker_version"`
-	OS             string    `json:"os"`
-	Arch           string    `json:"arch"`
-	CPUs           int       `json:"cpus"`
-	MemoryBytes    int64     `json:"memory_bytes"`
-	Labels         []string  `json:"labels"`
-	AgentTokenHash string    `json:"-"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	IsLocal       bool       `json:"is_local"`
+	Kind          ServerKind `json:"kind"`
+	Status        string     `json:"status"` // "online" | "offline"
+	LastSeen      time.Time  `json:"last_seen"`
+	DockerVersion string     `json:"docker_version"`
+	OS            string     `json:"os"`
+	Arch          string     `json:"arch"`
+	CPUs          int        `json:"cpus"`
+	MemoryBytes   int64      `json:"memory_bytes"`
+	Labels        []string   `json:"labels"`
+	// DockerHost is the Engine API endpoint for direct servers.
+	DockerHost string `json:"docker_host,omitempty"`
+	// TLS material is referenced by file path and never exposed over the API.
+	TLSCA          string `json:"-"`
+	TLSCert        string `json:"-"`
+	TLSKey         string `json:"-"`
+	AgentTokenHash string `json:"-"`
+	// NameCustom records that an operator chose this name, so snapshot reports
+	// never overwrite it with the host's own hostname.
+	NameCustom bool      `json:"-"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// TLSEnabled reports whether TLS material is configured for this endpoint.
+func (s Server) TLSEnabled() bool {
+	return s.TLSCA != "" || s.TLSCert != "" || s.TLSKey != ""
 }
 
 // StackKind discriminates between Docker Compose projects and Swarm stacks.
@@ -27,6 +54,8 @@ type StackKind string
 const (
 	StackCompose StackKind = "compose"
 	StackSwarm   StackKind = "swarm"
+	// StackPod groups containers that Podman runs inside one pod.
+	StackPod StackKind = "pod"
 )
 
 // Stack groups containers that belong to one compose project or swarm stack.
@@ -62,7 +91,11 @@ type Container struct {
 	Labels         map[string]string `json:"labels"`
 	Ports          []string          `json:"ports"`
 	Pinned         bool              `json:"pinned"` // do not offer updates
-	UpdatedAt      time.Time         `json:"updated_at"`
+	// SystemdUnit is set when the container is managed by systemd (Quadlet); it
+	// is unsafe to recreate such a container behind systemd's back.
+	SystemdUnit string    `json:"systemd_unit,omitempty"`
+	Managed     bool      `json:"managed"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // Update describes an available update for a container.
