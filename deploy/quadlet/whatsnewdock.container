@@ -26,6 +26,12 @@ Environment=WND_UPDATE_INTERVAL=6h
 Environment=WND_CHANGELOG_COUNT=5
 Environment=WND_LOG_LEVEL=info
 
+# --- Optional: TLS material for agentless "direct" endpoints -----------------
+# Mount certificates read-only and reference them by path in the UI
+# (Servers -> Add server -> Direct endpoint); they are never copied into the
+# database. Required for any direct endpoint that is not loopback.
+# Volume=/etc/whatsnewdock/certs:/certs:ro,Z
+
 # Secrets: WND_INITIAL_ADMIN_PASSWORD, WND_OIDC_CLIENT_SECRET,
 # WND_AUTH_SESSION_SECRET, WND_GITHUB_TOKEN. Keep the file root-only (0600);
 # the leading "-" makes it optional.
