@@ -92,6 +92,11 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                           {timeAgo(c.update.checked_at)}
                         </span>
                       )}
+                      {c.managed && (
+                        <span className="text-[11px] text-warning">
+                          managed by {c.systemd_unit || 'systemd'}
+                        </span>
+                      )}
                     </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">
@@ -101,7 +106,9 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                    {isAdmin && c.update && (
+                    {/* A systemd-managed container (Podman Quadlet) must be
+                        updated through its unit, never recreated underneath it. */}
+                    {isAdmin && c.update && !c.managed && (
                       <Button
                         size="sm"
                         variant="primary"
@@ -112,6 +119,14 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                         <RefreshCw className="h-3.5 w-3.5" />
                         Update
                       </Button>
+                    )}
+                    {c.managed && (
+                      <span
+                        className="text-[11px] text-muted-foreground"
+                        title={`Managed by ${c.systemd_unit || 'systemd'} — update with \`podman auto-update\` or by editing the Quadlet unit`}
+                      >
+                        update via systemd
+                      </span>
                     )}
                     {isAdmin && (
                       <Button

@@ -1,13 +1,54 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Server as ServerIcon, Plus, Trash2, Copy, Check, Cpu, MemoryStick } from 'lucide-react'
+import {
+  Server as ServerIcon,
+  Plus,
+  Trash2,
+  Copy,
+  Check,
+  Cpu,
+  MemoryStick,
+  Pencil,
+  Radio,
+  Network,
+} from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
 import { api } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 import type { Container, Server } from '@/lib/types'
-import { Badge, Button, Card, Input, Label, Loading, Modal, ConfirmDialog, EmptyState } from '@/components/ui'
+import {
+  Badge,
+  Button,
+  Card,
+  Input,
+  Label,
+  Loading,
+  Modal,
+  ConfirmDialog,
+  EmptyState,
+} from '@/components/ui'
 import ServerNameEdit from '@/components/ServerNameEdit'
+import DirectEndpointForm, { type EndpointValues } from '@/components/DirectEndpointForm'
 import { formatBytes, timeAgo } from '@/lib/utils'
+
+type AddMode = 'agent' | 'direct'
+
+function ServerKindBadge({ server }: { server: Server }) {
+  const kind = server.is_local ? 'local' : server.kind || 'agent'
+  if (kind === 'local') return <Badge variant="primary">local</Badge>
+  if (kind === 'direct') {
+    return (
+      <Badge variant="default">
+        <Network className="mr-1 h-3 w-3" /> direct
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="default">
+      <Radio className="mr-1 h-3 w-3" /> agent
+    </Badge>
+  )
+}
 
 export default function Servers() {
   const { me } = useAuth()
@@ -16,10 +57,13 @@ export default function Servers() {
   const { data: containers } = useFetch<Container[]>('/api/v1/containers')
 
   const [adding, setAdding] = useState(false)
+  const [mode, setMode] = useState<AddMode>('agent')
   const [name, setName] = useState('')
+  const [addError, setAddError] = useState('')
   const [created, setCreated] = useState<{ name: string; token: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [deleting, setDeleting] = useState<Server | null>(null)
+  const [editingEndpoint, setEditingEndpoint] = useState<Server | null>(null)
 
   const counts = useMemo(() => {
     const map: Record<string, number> = {}
@@ -27,13 +71,44 @@ export default function Servers() {
     return map
   }, [containers])
 
-  const submit = async () => {
-    if (!name.trim()) return
-    const res = await api.post<{ id: string; name: string; token: string }>('/api/v1/servers', {
-      name: name.trim(),
-    })
-    setCreated(res)
+  const openAdd = (m: AddMode) => {
+    setMode(m)
+    setCreated(null)
+    setAddError('')
     setName('')
+    setAdding(true)
+  }
+
+  const submitAgent = async () => {
+    if (!name.trim()) return
+    setAddError('')
+    try {
+      const res = await api.post<{ id: string; name: string; token: string }>('/api/v1/servers', {
+        name: name.trim(),
+        kind: 'agent',
+      })
+      setCreated(res)
+      setName('')
+      refetch()
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : 'Could not create the server')
+    }
+  }
+
+  const submitDirect = async (values: EndpointValues) => {
+    await api.post('/api/v1/servers', { name: name.trim(), kind: 'direct', ...values })
+    setAdding(false)
+    setName('')
+    refetch()
+  }
+
+  const saveEndpoint = async (values: EndpointValues) => {
+    if (!editingEndpoint) return
+    await api.patch(`/api/v1/servers/${editingEndpoint.id}`, {
+      name: editingEndpoint.name,
+      ...values,
+    })
+    setEditingEndpoint(null)
     refetch()
   }
 
@@ -67,7 +142,7 @@ export default function Servers() {
           </p>
         </div>
         {isAdmin && (
-          <Button onClick={() => { setAdding(true); setCreated(null) }}>
+          <Button onClick={() => openAdd('agent')}>
             <Plus className="h-4 w-4" /> Add server
           </Button>
         )}
@@ -76,7 +151,7 @@ export default function Servers() {
       {(servers || []).length === 0 ? (
         <EmptyState
           title="No servers"
-          hint="Add a remote server with an agent, or mount the Docker socket locally."
+          hint="Add a host with an agent or a direct Docker API endpoint, or mount the Docker socket locally."
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -114,14 +189,26 @@ export default function Servers() {
                       <Badge variant={s.online ? 'success' : 'muted'}>
                         {s.online ? 'online' : 'offline'}
                       </Badge>
-                      {s.is_local && <Badge variant="primary">local</Badge>}
+                      <ServerKindBadge server={s} />
                     </div>
                   </div>
                 </div>
                 {isAdmin && !s.is_local && (
-                  <Button size="icon" variant="ghost" onClick={() => setDeleting(s)}>
-                    <Trash2 className="h-4 w-4 text-danger" />
-                  </Button>
+                  <div className="flex items-center">
+                    {s.kind === 'direct' && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setEditingEndpoint(s)}
+                        title="Edit endpoint"
+                      >
+                        <Pencil className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    )}
+                    <Button size="icon" variant="ghost" onClick={() => setDeleting(s)}>
+                      <Trash2 className="h-4 w-4 text-danger" />
+                    </Button>
+                  </div>
                 )}
               </div>
 
@@ -149,6 +236,15 @@ export default function Servers() {
                     {s.os || '—'} {s.arch ? `/ ${s.arch}` : ''}
                   </span>
                 </div>
+                {s.kind === 'direct' && (
+                  <div className="flex justify-between gap-3">
+                    <span>Endpoint</span>
+                    <span className="truncate font-mono text-foreground" title={s.docker_host}>
+                      {s.docker_host || '—'}
+                      {s.tls ? ' · tls' : ''}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span>Last seen</span>
                   <span>{timeAgo(s.last_seen)}</span>
@@ -160,7 +256,11 @@ export default function Servers() {
       )}
 
       {/* Add server modal */}
-      <Modal open={adding} onClose={() => setAdding(false)} title="Add server">
+      <Modal
+        open={adding}
+        onClose={() => setAdding(false)}
+        title={mode === 'direct' ? 'Add direct endpoint' : 'Add server'}
+      >
         {created ? (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
@@ -193,20 +293,73 @@ export default function Servers() {
           </div>
         ) : (
           <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-border p-1">
+              {(['agent', 'direct'] as AddMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setMode(m)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    mode === m
+                      ? 'bg-primary text-primary-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {m === 'agent' ? 'Agent' : 'Direct endpoint'}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {mode === 'agent'
+                ? 'A small agent runs next to Docker and reports in. Works across NAT and firewalls.'
+                : 'This server talks to the remote Docker API itself — no agent to install. The endpoint must be reachable from here.'}
+            </p>
+
             <div>
               <Label>Server name</Label>
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. homelab-nas"
-                onKeyDown={(e) => e.key === 'Enter' && submit()}
+                onKeyDown={(e) => e.key === 'Enter' && mode === 'agent' && submitAgent()}
                 autoFocus
               />
             </div>
-            <Button className="w-full" onClick={submit}>
-              Create server
-            </Button>
+
+            {addError && <p className="text-xs text-danger">{addError}</p>}
+
+            {mode === 'agent' ? (
+              <Button className="w-full" onClick={submitAgent}>
+                Create server
+              </Button>
+            ) : name.trim() ? (
+              <DirectEndpointForm submitLabel="Add endpoint" onSubmit={submitDirect} />
+            ) : (
+              <p className="text-xs text-muted-foreground">Give the server a name to continue.</p>
+            )}
           </div>
+        )}
+      </Modal>
+
+      {/* Edit direct endpoint modal */}
+      <Modal
+        open={!!editingEndpoint}
+        onClose={() => setEditingEndpoint(null)}
+        title={`Endpoint for ${editingEndpoint?.name ?? ''}`}
+      >
+        {editingEndpoint && (
+          <DirectEndpointForm
+            editing
+            initialTls={editingEndpoint.tls}
+            initial={{
+              docker_host: editingEndpoint.docker_host ?? '',
+              tls_ca: '',
+              tls_cert: '',
+              tls_key: '',
+            }}
+            submitLabel="Save endpoint"
+            onSubmit={saveEndpoint}
+            onCancel={() => setEditingEndpoint(null)}
+          />
         )}
       </Modal>
 

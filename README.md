@@ -25,8 +25,9 @@ stacks and containers, with one-click image updates.
 - **One-click updates** — recreate a container with the newer image using only
   the Docker Engine API (no shell commands), with live progress and automatic
   rollback if the replacement fails to start.
-- **Agent architecture** — deploy an agent on every server and view *all*
-  servers, stacks and containers in one UI.
+- **Agent or agentless** — deploy an agent on every server, add a remote Docker
+  API endpoint directly, or both; view *all* servers, stacks and containers in
+  one UI.
 - **Unified & hierarchical views** — filter the unified container list by
   server, stack, state, registry, update availability and free-text; or drill
   server → stack → container.
@@ -61,6 +62,8 @@ stacks and containers, with one-click image updates.
 - **Agent mode** (`WND_MODE=agent`) snapshots a Docker host and reports it to a
   server, and executes update commands queued by the server. Each agent host
   runs its own socket-proxy.
+- **Direct endpoints** (optional, server mode) let the server talk to a remote
+  Docker Engine API itself, so a host needs no agent binary at all.
 - A single binary (`whatsnewdock`) runs in either mode.
 
 Everything is stored in an embedded **SQLite** database — no external
@@ -113,6 +116,34 @@ docker run -d --name whatsnewdock-agent --restart unless-stopped \
 Or use the commented compose example at the bottom of `docker-compose.yml`,
 which is preferable (both services share a compose network).
 
+### Adding a host without an agent (direct endpoint)
+
+If the Docker API of another host is reachable from the WhatsNewDock container
+(same LAN, VPN, or a shared Docker network), you can skip the agent entirely:
+
+1. **Servers** → **Add server** → **Direct endpoint**.
+2. Enter the Engine API URL, e.g. `tcp://10.0.0.5:2376`, and the **mounted file
+   paths** of the CA (plus client certificate and key for mutual TLS).
+3. Click **Test connection** — the server pings the daemon and shows its
+   version before anything is saved.
+
+Direct endpoints are polled every 30 s and updated in place like local
+containers; updates run from this server, never through the agent queue.
+
+Two rules are enforced when an endpoint is saved, and both exist to protect the
+remote host:
+
+- **No plaintext over the network.** `tcp://` without TLS is accepted only for
+  `127.0.0.1` / `localhost` / `::1` and unix sockets — that is how the bundled
+  `socket-proxy` sidecar is reached. Any other host must use TLS.
+- **No PEM in the database.** Certificates are referenced by file path inside
+  the WhatsNewDock container and mounted read-only; the paths are never sent
+  back to the browser.
+
+The compose and Quadlet deployments are unchanged by this: an agent-only
+deployment keeps using the bearer-token queue exactly as before, and direct
+endpoints are opt-in per host.
+
 ### Deploying with Podman Quadlet
 
 The same image and environment variables also run as native systemd services
@@ -129,6 +160,20 @@ sudo systemctl start whatsnewdock
 
 See [`deploy/quadlet/README.md`](deploy/quadlet/README.md) for secrets files,
 rootless setup, SELinux and volume-ownership notes, and auto-updates.
+
+### Monitoring Quadlet-managed containers
+
+Containers started from a Quadlet unit carry the `PODMAN_SYSTEMD_UNIT` label, so
+WhatsNewDock lists them with a badge showing the owning unit and **does not**
+offer one-click updates for them. Recreating such a container underneath
+systemd would leave the unit tracking a container that no longer exists; the UI
+points at `podman auto-update` (or editing the unit plus
+`systemctl daemon-reload`) instead. Everything else — plain Docker containers,
+compose projects, and Podman containers started by hand — keeps the normal
+update button, so behaviour on Docker hosts is unchanged.
+
+Containers that Podman created from `podman kube play` are grouped by their pod
+name, but only when no swarm or compose project label is present.
 
 ---
 
@@ -248,6 +293,10 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the full model. Highlights:
   `WND_DOCKER_ENABLE_RECREATE=false` for a fully read-only deployment.
 - **Agent auth** — agents authenticate with per-server bearer tokens (stored
   hashed, never plaintext).
+- **Direct endpoints are TLS-only** — a remote Engine API is refused unless TLS
+  material is configured, and the certificate paths (never their contents) are
+  validated at save time. `PODMAN_SYSTEMD_UNIT` containers are never recreated
+  behind systemd's back.
 - **Web auth** — bcrypt password hashing, HttpOnly `SameSite` session cookies,
   CSRF header checks on mutations, OIDC state validation.
 - **CI security gates** — `gosec`, `govulncheck`, `npm audit` and a Trivy scan

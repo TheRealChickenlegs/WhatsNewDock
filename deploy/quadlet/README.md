@@ -143,21 +143,32 @@ changes. Note the asymmetry with the app itself: for containers **inside**
 WhatsNewDock you can use the built-in one-click update, but for the
 WhatsNewDock container the host's systemd/auto-update owns it.
 
+WhatsNewDock recognises this automatically. Any container carrying Podman's
+`PODMAN_SYSTEMD_UNIT` label is shown with its unit name and is **not** offered a
+one-click update — recreating it underneath systemd would leave the unit out of
+sync, so the UI directs you to `podman auto-update` or to editing the unit and
+running `systemctl daemon-reload`. Containers without that label are unaffected.
+
 ## Multi-host
 
-Quadlet runs on the host it is installed on. To monitor several hosts, install
-the socket-proxy **and** `whatsnewdock-agent.container` on each additional host
-and point them at the central server:
+Quadlet runs on the host it is installed on.
 
-1. In the server UI, open **Servers → Add server** and copy the one-time token.
-2. On the extra host, put the token in `/etc/whatsnewdock-agent.env` and:
-   ```bash
-   sudo systemctl start whatsnewdock-socket-proxy whatsnewdock-agent
-   ```
-
-The agent only makes **outbound** connections — no inbound ports and no exposed
-API on the monitored hosts. (A single-deployment, agentless mode is not part of
-this change; the agent remains the recommended way to add hosts.)
+- **Recommended — agent.** Install the socket-proxy **and**
+  `whatsnewdock-agent.container` on each additional host and point them at the
+  central server:
+  1. In the server UI, open **Servers → Add server → Agent** and copy the
+     one-time token.
+  2. On the extra host, put the token in `/etc/whatsnewdock-agent.env` and:
+     ```bash
+     sudo systemctl start whatsnewdock-socket-proxy whatsnewdock-agent
+     ```
+  The agent only makes **outbound** connections — no inbound ports and no
+  exposed API on the monitored hosts.
+- **Alternative — direct endpoint.** If the extra host's socket-proxy is
+  reachable from the WhatsNewDock container (same network or VPN), add it as a
+  **Direct endpoint** instead and skip the agent. This needs TLS off-loopback:
+  expose the socket-proxy over `tcp://` with a certificate, and mount the CA
+  (plus client cert and key) into the WhatsNewDock container.
 
 ## Notes and gotchas
 

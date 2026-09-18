@@ -98,6 +98,12 @@ services:
       # WND_TRUSTED_PROXIES: 10.0.0.0/8
     volumes:
       - whatsnewdock-data:/data
+      # --- Optional: TLS material for agentless "direct" endpoints ---------
+      # Certificates are mounted read-only and referenced by path in the UI
+      # (Servers -> Add server -> Direct endpoint); they are never copied into
+      # the database. A direct endpoint pointed at a remote socket-proxy needs
+      # a CA, plus a client certificate and key for mutual TLS.
+      # - ./certs:/certs:ro
     # The container runs as a non-root user (uid 65532). If you use a bind
     # mount for /data (e.g. `./whatsnewdock:/data`) instead of the named volume
     # above, make that directory writable by uid 65532:

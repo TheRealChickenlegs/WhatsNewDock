@@ -45,7 +45,21 @@ export function useContainerActions(refetch: () => void) {
     [refetch],
   )
 
-  const requestUpdate = useCallback((c: Container) => setConfirm(c), [])
+  // requestUpdate opens the confirmation dialog, except for containers owned by
+  // a systemd unit: recreating those underneath systemd is not supported.
+  const requestUpdate = useCallback(
+    (c: Container) => {
+      if (c.managed) {
+        notify(
+          'error',
+          `${c.name} is managed by ${c.systemd_unit || 'systemd'} — update it with \`podman auto-update\` or via its Quadlet unit`,
+        )
+        return
+      }
+      setConfirm(c)
+    },
+    [],
+  )
 
   const pollUpdateStatus = useCallback(
     (id: string) => {

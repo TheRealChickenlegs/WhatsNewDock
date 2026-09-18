@@ -45,6 +45,16 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
               <InfoRow label="Registry" value={registryLabel(c.registry)} />
               <InfoRow label="Status" value={c.status} />
               <InfoRow label="Restart policy" value={c.restart_policy || '—'} />
+              {c.managed && (
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground">Managed by</div>
+                  <div className="mt-1">
+                    <Badge variant="warning">
+                      <span className="font-mono">{c.systemd_unit || 'systemd'}</span>
+                    </Badge>
+                  </div>
+                </div>
+              )}
               <InfoRow label="Created" value={formatDate(c.created_at)} />
               {c.ports && c.ports.length > 0 && (
                 <div>
@@ -66,7 +76,15 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
 
             {isAdmin && (
               <div className="flex flex-col gap-2 border-t border-border pt-4">
-                {update ? (
+                {c.managed ? (
+                  <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+                    This container belongs to{' '}
+                    <span className="font-mono">{c.systemd_unit || 'a systemd unit'}</span>. Update it
+                    with <span className="font-mono">podman auto-update</span>, or edit the Quadlet
+                    unit and run <span className="font-mono">systemctl daemon-reload</span> — recreating
+                    it here would leave systemd out of sync.
+                  </p>
+                ) : update ? (
                   <Button onClick={() => onUpdate(c)}>
                     <RefreshCw className="h-4 w-4" />
                     Update to {update.latest_tag}

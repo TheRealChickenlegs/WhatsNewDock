@@ -1,7 +1,11 @@
+export type ServerKind = 'local' | 'agent' | 'direct'
+
 export interface Server {
   id: string
   name: string
   is_local: boolean
+  /** How the host is reached: this instance, an agent, or a direct endpoint. */
+  kind: ServerKind
   online: boolean
   last_seen: string
   docker_version: string
@@ -10,6 +14,10 @@ export interface Server {
   cpus: number
   memory_bytes: number
   labels: string[]
+  /** Direct endpoints only: the Docker Engine API URL. */
+  docker_host?: string
+  /** Direct endpoints only: whether TLS material is configured. */
+  tls?: boolean
 }
 
 export interface Stack {
@@ -55,6 +63,10 @@ export interface Container {
   labels: Record<string, string>
   ports: string[]
   pinned: boolean
+  /** Podman Quadlet: the systemd unit that owns this container. */
+  systemd_unit?: string
+  /** True when the container is managed by systemd and must be updated there. */
+  managed: boolean
   updated_at: string
   server_name: string
   update: Update | null
