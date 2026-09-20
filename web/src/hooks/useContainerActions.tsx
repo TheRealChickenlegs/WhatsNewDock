@@ -45,14 +45,15 @@ export function useContainerActions(refetch: () => void) {
     [refetch],
   )
 
-  // requestUpdate opens the confirmation dialog, except for containers owned by
-  // a systemd unit: recreating those underneath systemd is not supported.
+  // requestUpdate opens the confirmation dialog. A systemd-managed container
+  // cannot be updated while it is stopped: the unit's teardown removed it, and
+  // nothing in the Docker API can start a unit again.
   const requestUpdate = useCallback(
     (c: Container) => {
-      if (c.managed) {
+      if (c.managed && !c.running) {
         notify(
           'error',
-          `${c.name} is managed by ${c.systemd_unit || 'systemd'} — update it with \`podman auto-update\` or via its Quadlet unit`,
+          `${c.name} is managed by ${c.systemd_unit || 'systemd'} and is not running — start it first (systemctl start ${c.systemd_unit || '<unit>'})`,
         )
         return
       }
@@ -156,7 +157,11 @@ export function useContainerActions(refetch: () => void) {
           <span className="font-mono text-foreground">{confirm?.update?.latest_tag}</span>?
           <br />
           <span className="text-xs">
-            The image will be pulled and the container recreated with its current configuration.
+            {confirm?.managed
+              ? `The image will be pulled and the systemd unit (${
+                  confirm.systemd_unit || 'systemd'
+                }) will recreate the container on it.`
+              : 'The image will be pulled and the container recreated with its current configuration.'}
           </span>
         </>
       }

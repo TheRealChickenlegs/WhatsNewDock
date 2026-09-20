@@ -161,16 +161,45 @@ sudo systemctl start whatsnewdock
 See [`deploy/quadlet/README.md`](deploy/quadlet/README.md) for secrets files,
 rootless setup, SELinux and volume-ownership notes, and auto-updates.
 
-### Monitoring Quadlet-managed containers
+### Updating Quadlet-managed containers
 
 Containers started from a Quadlet unit carry the `PODMAN_SYSTEMD_UNIT` label, so
-WhatsNewDock lists them with a badge showing the owning unit and **does not**
-offer one-click updates for them. Recreating such a container underneath
-systemd would leave the unit tracking a container that no longer exists; the UI
-points at `podman auto-update` (or editing the unit plus
-`systemctl daemon-reload`) instead. Everything else — plain Docker containers,
-compose projects, and Podman containers started by hand — keeps the normal
-update button, so behaviour on Docker hosts is unchanged.
+WhatsNewDock lists them with a badge showing the owning unit. Their updates work
+differently from every other container, because the rename-and-recreate dance
+cannot work for them: stopping such a container makes its unit tear the
+container down, so by the time a recreate tried to rename the old container it
+would already be gone (the `failed to rename old container` error), and a
+container we created ourselves would collide with systemd's own respawn.
+
+Instead, one-click update **hands the recreate to systemd**:
+
+1. the new image is pulled (a failed pull leaves the running container alone);
+2. the container is stopped, which is what makes the unit's `ExecStop` remove it
+   and its `Restart=` policy start a fresh one from the unit definition — now on
+   the newly pulled tag;
+3. WhatsNewDock polls for that container to come back under the same name, with
+   a **new** container id, in the `running` state, and only reports success then.
+   A container that reappears but never reaches running (a crash-loop on a broken
+   image) is reported as a failure, never as a successful update. So is a
+   container that comes back on the *same* image, which means the unit's `Image=`
+   still points at the old tag.
+
+Two requirements follow from this:
+
+- **The unit needs a `Restart=` policy** (`on-failure` or `always`), otherwise
+  nothing brings the container back. Add it to the unit's `[Service]` section.
+- **The container must be running.** A stopped Quadlet container does not exist —
+  its unit is inactive — and nothing in the Docker Engine API can start a unit.
+  WhatsNewDock refuses this case immediately with a `systemctl start <unit>`
+  hint rather than waiting out a timeout.
+
+If you would rather not have the app touch them at all, `AutoUpdate=registry` on
+the unit plus `podman auto-update` remains a perfectly good alternative — the
+app will still track and show the available updates.
+
+Everything else — plain Docker containers, compose projects, and Podman
+containers started by hand — keeps the ordinary recreate flow, and any failure
+during it puts the original container back, running, under its own name.
 
 Containers that Podman created from `podman kube play` are grouped by their pod
 name, but only when no swarm or compose project label is present.
@@ -349,6 +378,24 @@ cd web && npm run dev
 
 The backend serves the UI from embedded assets; `make build` compiles the
 frontend into `internal/webui/dist` before building the Go binary.
+
+### Testing the update flow against a real runtime
+
+Most of the recreate logic is covered by unit tests against a fake daemon, but
+the container round-trip can only really be proven against a live engine. Those
+tests are skipped unless a Docker-compatible socket is provided:
+
+```bash
+podman system service --time=0 unix:///tmp/wnd-podman.sock &
+WND_PODMAN_TEST_HOST=unix:///tmp/wnd-podman.sock go test ./internal/dockerx/ -run Live -v
+```
+
+They create throwaway `wnd-live-*` containers from `alpine:3.20`/`:3.21`, then
+check the ordinary recreate, the refusal of a stopped Quadlet container, and the
+systemd respawn path (with a stand-in for the unit). This is how the Podman
+`MemorySwappiness` round-trip problem was found: Podman reports `0` for a
+container that never set it, and handing that back makes crun refuse to start the
+replacement on a cgroup v2 host.
 
 ---
 

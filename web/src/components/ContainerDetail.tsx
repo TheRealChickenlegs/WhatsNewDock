@@ -76,21 +76,22 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
 
             {isAdmin && (
               <div className="flex flex-col gap-2 border-t border-border pt-4">
-                {c.managed ? (
-                  <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground">
-                    This container belongs to{' '}
-                    <span className="font-mono">{c.systemd_unit || 'a systemd unit'}</span>. Update it
-                    with <span className="font-mono">podman auto-update</span>, or edit the Quadlet
-                    unit and run <span className="font-mono">systemctl daemon-reload</span> — recreating
-                    it here would leave systemd out of sync.
-                  </p>
-                ) : update ? (
+                {update ? (
                   <Button onClick={() => onUpdate(c)}>
                     <RefreshCw className="h-4 w-4" />
                     Update to {update.latest_tag}
                   </Button>
                 ) : (
                   <p className="text-xs text-muted-foreground">No update available.</p>
+                )}
+                {c.managed && (
+                  <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+                    This container belongs to{' '}
+                    <span className="font-mono">{c.systemd_unit || 'a systemd unit'}</span>. The
+                    update pulls the new image and then stops the container, so the unit recreates it
+                    on the new image — a <span className="font-mono">Restart=</span> policy on the
+                    unit is required, and the container must be running.
+                  </p>
                 )}
                 <Button variant="ghost" onClick={() => onPin(c, !c.pinned)}>
                   {c.pinned ? (

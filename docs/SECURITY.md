@@ -93,11 +93,26 @@ it is guarded accordingly:
 
 ### Podman / Quadlet containers
 
-Containers labelled `PODMAN_SYSTEMD_UNIT` belong to a systemd unit. The server
-records the unit and **refuses** to recreate such a container (HTTP 409 with an
-actionable message), because systemd would be left tracking a container that no
-longer exists. The check is driven purely by that runtime label, so Docker
-containers and hand-started Podman containers are never affected.
+Containers labelled `PODMAN_SYSTEMD_UNIT` belong to a systemd unit. They cannot
+be recreated the ordinary way — a stop makes the unit tear the container down, so
+renaming the old container fails and a container created by us would collide
+with systemd's respawn. Instead the update is handed to systemd: the image is
+pulled first, the container is stopped so the unit's `Restart=` policy brings it
+back on the new tag, and the result is only reported as successful once a
+container with a **new id** is observed `running` under the exact same name. A
+crash-looping or unchanged replacement is a reported failure. A stopped Quadlet
+container is refused up front, since the Engine API cannot start a unit.
+
+Two details matter for safety here:
+
+- **Exact-name matching.** The container list `name` filter is regex-contains on
+  both Docker and Podman, so a lookup for `web` also matches `web-prev-1234` (the
+  rollback name this project creates) and `my-web`. Every name lookup is
+  confirmed against the full name, so the update can never be "verified" against
+  the wrong container.
+- **No silent workload outage.** In the ordinary recreate flow, every failure
+  after the container is stopped restores it — its name and, if it was running,
+  its running state — regardless of its restart policy.
 
 ### Alternatives
 

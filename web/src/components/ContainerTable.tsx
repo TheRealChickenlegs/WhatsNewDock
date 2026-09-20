@@ -93,8 +93,8 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                         </span>
                       )}
                       {c.managed && (
-                        <span className="text-[11px] text-warning">
-                          managed by {c.systemd_unit || 'systemd'}
+                        <span className="text-[11px] text-muted-foreground">
+                          systemd: {c.systemd_unit || 'managed'}
                         </span>
                       )}
                     </div>
@@ -106,27 +106,21 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
-                    {/* A systemd-managed container (Podman Quadlet) must be
-                        updated through its unit, never recreated underneath it. */}
-                    {isAdmin && c.update && !c.managed && (
+                    {isAdmin && c.update && (
                       <Button
                         size="sm"
                         variant="primary"
                         loading={busyId === c.id}
                         onClick={() => handleUpdate(c)}
-                        title={`Update to ${c.update.latest_tag}`}
+                        title={
+                          c.managed
+                            ? `Update to ${c.update.latest_tag} — the systemd unit will recreate this container`
+                            : `Update to ${c.update.latest_tag}`
+                        }
                       >
                         <RefreshCw className="h-3.5 w-3.5" />
                         Update
                       </Button>
-                    )}
-                    {c.managed && (
-                      <span
-                        className="text-[11px] text-muted-foreground"
-                        title={`Managed by ${c.systemd_unit || 'systemd'} — update with \`podman auto-update\` or by editing the Quadlet unit`}
-                      >
-                        update via systemd
-                      </span>
                     )}
                     {isAdmin && (
                       <Button
