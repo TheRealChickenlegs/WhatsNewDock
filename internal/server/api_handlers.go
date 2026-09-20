@@ -42,20 +42,25 @@ func (s *Server) executorFor(srv *store.Server) (*dockerx.Client, error) {
 	return nil, nil
 }
 
-// updateBlockedReason explains why a container must not be recreated by us, or
-// returns "" when the update may proceed. Only containers the runtime itself
-// reports as systemd-managed (Podman Quadlet) are blocked, so Docker hosts and
-// hand-started Podman containers are unaffected.
+// updateBlockedReason explains why a container cannot be updated at all, or
+// returns "" when the update may proceed.
+//
+// A systemd-managed (Podman Quadlet) container is updated by handing the
+// recreate to its systemd unit, which only works while the container is
+// running: the unit's teardown removes a stopped container, and nothing in the
+// Docker Engine API can start a unit again. Refusing here turns a 90-second
+// timeout into an immediate, actionable message.
 func updateBlockedReason(c *store.ContainerWithUpdate) string {
-	if !c.Managed {
+	if !c.Managed || c.Running {
 		return ""
 	}
-	unit := c.SystemdUnit
-	if unit == "" {
-		unit = "its systemd unit"
+	if c.SystemdUnit == "" {
+		return "cannot update " + c.Name + ": it is managed by systemd and is not running. " +
+			"Start its unit first so it comes up on the newly pulled image."
 	}
-	return "this container is managed by " + unit + "; update it with `podman auto-update` or by " +
-		"editing the Quadlet unit and running `systemctl daemon-reload`, not by recreating the container"
+	return "cannot update " + c.Name + ": it is managed by the systemd unit " + c.SystemdUnit +
+		" and is not running. Start it first (`systemctl start " + c.SystemdUnit +
+		"`) so it comes up on the newly pulled image."
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -512,9 +517,8 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 		actor = u.Username
 	}
 
-	// A container that belongs to a systemd unit (Podman Quadlet) must be
-	// updated through that unit: recreating it behind systemd's back leaves the
-	// unit tracking a container that no longer exists.
+	// A systemd-managed (Podman Quadlet) container is updated by handing the
+	// recreate to its unit, which cannot be done while it is stopped.
 	if reason := updateBlockedReason(c); reason != "" {
 		writeError(w, http.StatusConflict, reason)
 		return

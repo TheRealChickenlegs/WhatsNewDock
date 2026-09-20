@@ -346,10 +346,15 @@ func TestDirectEndpointRunsUpdatesInProcess(t *testing.T) {
 	}
 }
 
-// TestQuadletGuardBlocksUpdateOverHTTP checks the guard end to end: a container
-// the runtime reports as systemd-managed is refused with an actionable message
-// and nothing is queued for any agent.
-func TestQuadletGuardBlocksUpdateOverHTTP(t *testing.T) {
+// TestQuadletUpdateRoutingOverHTTP covers the systemd-managed update path at the
+// API boundary:
+//
+//   - a RUNNING systemd-managed container is updatable (the recreate is handed
+//     to its unit), so it must not be refused;
+//   - a STOPPED one is refused with an actionable message, because the unit's
+//     teardown removed the container and the Engine API cannot start a unit;
+//   - neither case may queue a command for an agent.
+func TestQuadletUpdateRoutingOverHTTP(t *testing.T) {
 	s := newAgentOnlyTestServer(t)
 
 	srv := &store.Server{Name: "podman-host", Kind: store.ServerDirect, Status: "online",
@@ -377,22 +382,44 @@ func TestQuadletGuardBlocksUpdateOverHTTP(t *testing.T) {
 		t.Fatalf("upsert update: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/"+c.ID+"/update", nil)
-	req.SetPathValue("id", c.ID)
-	rec := httptest.NewRecorder()
-	s.handleRequestUpdate(rec, req)
+	requestUpdate := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/"+c.ID+"/update", nil)
+		req.SetPathValue("id", c.ID)
+		rec := httptest.NewRecorder()
+		s.handleRequestUpdate(rec, req)
+		return rec
+	}
+
+	// A running Quadlet container is updated by handing the recreate to systemd.
+	if rec := requestUpdate(); rec.Code != http.StatusOK {
+		t.Fatalf("running systemd-managed container = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	// Now the container is reported stopped: refuse before the 90s timeout.
+	if err := s.st.ReplaceServerSnapshot(srv, nil, []*store.Container{{
+		DockerID: "quadlet111", Name: "web", Image: "nginx:1.25",
+		ImageName: "docker.io/library/nginx", ImageTag: "1.25",
+		Registry: "docker.io", Repository: "library/nginx",
+		State: "exited", Running: false,
+		SystemdUnit: "web.service", Managed: true,
+	}}); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	rec := requestUpdate()
 	if rec.Code != http.StatusConflict {
-		t.Fatalf("managed container update = %d, want 409: %s", rec.Code, rec.Body.String())
+		t.Fatalf("stopped systemd-managed container = %d, want 409: %s", rec.Code, rec.Body.String())
 	}
-	if body := rec.Body.String(); !strings.Contains(body, "web.service") || !strings.Contains(body, "auto-update") {
-		t.Errorf("unhelpful guard message: %s", body)
+	if body := rec.Body.String(); !strings.Contains(body, "web.service") ||
+		!strings.Contains(body, "systemctl start web.service") {
+		t.Errorf("unhelpful refusal: %s", body)
 	}
+
 	cmds, err := s.st.ListPendingCommands(srv.ID)
 	if err != nil {
 		t.Fatalf("list commands: %v", err)
 	}
 	if len(cmds) != 0 {
-		t.Fatalf("blocked update still queued a command: %+v", cmds)
+		t.Fatalf("a direct endpoint queued an agent command: %+v", cmds)
 	}
 }
 

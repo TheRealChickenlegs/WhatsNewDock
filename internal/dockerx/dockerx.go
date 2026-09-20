@@ -6,8 +6,6 @@ package dockerx
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,7 +13,6 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 
@@ -218,136 +215,6 @@ func formatPorts(ports []container.Port) []string {
 // ProgressFunc reports update progress. stage is "pulling" (percent 0-100) or
 // "recreating" (percent -1, indeterminate).
 type ProgressFunc func(stage string, percent int)
-
-// RecreateContainer pulls a target image and recreates the container against
-// it, preserving the original configuration. The old container is removed once
-// the replacement is running (mirroring docker-compose semantics), and restored
-// if the replacement fails to start.
-func (c *Client) RecreateContainer(ctx context.Context, containerID, targetImage string, progress ProgressFunc) error {
-	insp, err := c.cli.ContainerInspect(ctx, containerID)
-	if err != nil {
-		return fmt.Errorf("inspect container: %w", err)
-	}
-
-	// 1. Pull the target image.
-	if err := c.pullImage(ctx, targetImage, progress); err != nil {
-		return err
-	}
-
-	// 2. Build new container config from the old one, swapping the image.
-	newConfig := *insp.Config
-	newConfig.Image = targetImage
-
-	// 3. Stop the old container.
-	timeout := 30
-	if err := c.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		return fmt.Errorf("stop container: %w", err)
-	}
-
-	// 4. Rename old container as a rollback backup.
-	backupName := fmt.Sprintf("%s-prev-%d", strings.TrimPrefix(insp.Name, "/"), time.Now().Unix())
-	if err := c.cli.ContainerRename(ctx, containerID, backupName); err != nil {
-		return fmt.Errorf("rename old container: %w", err)
-	}
-
-	// 5. Create the replacement.
-	if progress != nil {
-		progress("recreating", -1)
-	}
-	netConfig := buildNetworkingConfig(insp.NetworkSettings)
-	created, err := c.cli.ContainerCreate(ctx, &newConfig, insp.HostConfig, netConfig, nil, insp.Name)
-	if err != nil {
-		// Roll back the rename so the old container keeps its name.
-		_ = c.cli.ContainerRename(ctx, containerID, insp.Name)
-		return fmt.Errorf("create replacement container: %w", err)
-	}
-
-	// 6. Start it.
-	if err := c.cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
-		// Roll back: drop the failed replacement and restore the old container.
-		_ = c.cli.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
-		_ = c.cli.ContainerRename(ctx, containerID, insp.Name)
-		if insp.State.Running {
-			_ = c.cli.ContainerStart(ctx, containerID, container.StartOptions{})
-		}
-		return fmt.Errorf("start replacement container: %w", err)
-	}
-
-	// 7. Remove the old container now that the replacement is running.
-	_ = c.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-
-	return nil
-}
-
-// pullMessage is one JSON progress message from the Docker ImagePull stream.
-type pullMessage struct {
-	ID          string `json:"id"`
-	Status      string `json:"status"`
-	Error       string `json:"error"`
-	ErrorDetail struct {
-		Message string `json:"message"`
-	} `json:"errorDetail"`
-	ProgressDetail struct {
-		Current int64 `json:"current"`
-		Total   int64 `json:"total"`
-	} `json:"progressDetail"`
-}
-
-// pullImage pulls an image and reports aggregate layer progress (and any pull
-// error embedded in the stream) through the progress callback.
-func (c *Client) pullImage(ctx context.Context, ref string, progress ProgressFunc) error {
-	auth := base64.URLEncoding.EncodeToString([]byte(`{}`))
-	stream, err := c.cli.ImagePull(ctx, ref, image.PullOptions{RegistryAuth: auth})
-	if err != nil {
-		return fmt.Errorf("pull image %s: %w", ref, err)
-	}
-	defer stream.Close()
-
-	layers := map[string][2]int64{}
-	dec := json.NewDecoder(stream)
-	for {
-		var msg pullMessage
-		if err := dec.Decode(&msg); err != nil {
-			// io.EOF (or a stray non-JSON line) — the pull has completed.
-			break
-		}
-		if msg.Error != "" {
-			errMsg := msg.Error
-			if msg.ErrorDetail.Message != "" {
-				errMsg = msg.ErrorDetail.Message
-			}
-			return fmt.Errorf("pull image %s: %s", ref, errMsg)
-		}
-		if msg.ID == "" {
-			continue
-		}
-		l := layers[msg.ID]
-		if msg.ProgressDetail.Total > 0 {
-			l[1] = msg.ProgressDetail.Total
-		}
-		if msg.ProgressDetail.Current > 0 {
-			l[0] = msg.ProgressDetail.Current
-		}
-		layers[msg.ID] = l
-
-		if progress != nil {
-			var cur, tot int64
-			for _, l := range layers {
-				cur += l[0]
-				tot += l[1]
-			}
-			pct := 0
-			if tot > 0 {
-				pct = int(cur * 100 / tot)
-				if pct > 100 {
-					pct = 100
-				}
-			}
-			progress("pulling", pct)
-		}
-	}
-	return nil
-}
 
 // buildNetworkingConfig reconstructs network endpoint config from an inspect.
 func buildNetworkingConfig(settings *types.NetworkSettings) *network.NetworkingConfig {

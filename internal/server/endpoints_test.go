@@ -195,16 +195,29 @@ func TestUpdateBlockedReason(t *testing.T) {
 	if reason := updateBlockedReason(&store.ContainerWithUpdate{}); reason != "" {
 		t.Errorf("unmanaged container blocked: %q", reason)
 	}
-	quadlet := &store.ContainerWithUpdate{}
-	quadlet.Managed = true
-	quadlet.SystemdUnit = "web.service"
-	reason := updateBlockedReason(quadlet)
-	if !strings.Contains(reason, "web.service") || !strings.Contains(reason, "auto-update") {
+	// A running Quadlet container is now updatable: the recreate is handed to
+	// its systemd unit rather than being refused.
+	running := &store.ContainerWithUpdate{}
+	running.Managed = true
+	running.Running = true
+	running.SystemdUnit = "web.service"
+	if reason := updateBlockedReason(running); reason != "" {
+		t.Errorf("a running systemd-managed container should be updatable: %q", reason)
+	}
+	// A stopped one cannot be: the unit's teardown removed the container and
+	// the Engine API cannot start a unit.
+	stopped := &store.ContainerWithUpdate{}
+	stopped.Managed = true
+	stopped.Name = "web"
+	stopped.SystemdUnit = "web.service"
+	reason := updateBlockedReason(stopped)
+	if !strings.Contains(reason, "web.service") || !strings.Contains(reason, "systemctl start web.service") {
 		t.Errorf("unhelpful message: %q", reason)
 	}
 	unnamed := &store.ContainerWithUpdate{}
 	unnamed.Managed = true
-	if reason := updateBlockedReason(unnamed); !strings.Contains(reason, "systemd unit") {
+	unnamed.Name = "web"
+	if reason := updateBlockedReason(unnamed); !strings.Contains(reason, "systemd") {
 		t.Errorf("unhelpful message: %q", reason)
 	}
 }
