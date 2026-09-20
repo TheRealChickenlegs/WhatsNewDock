@@ -144,10 +144,21 @@ WhatsNewDock you can use the built-in one-click update, but for the
 WhatsNewDock container the host's systemd/auto-update owns it.
 
 WhatsNewDock recognises this automatically. Any container carrying Podman's
-`PODMAN_SYSTEMD_UNIT` label is shown with its unit name and is **not** offered a
-one-click update — recreating it underneath systemd would leave the unit out of
-sync, so the UI directs you to `podman auto-update` or to editing the unit and
-running `systemctl daemon-reload`. Containers without that label are unaffected.
+`PODMAN_SYSTEMD_UNIT` label is shown with its unit name and its one-click update
+is **handed to systemd**: the new image is pulled, the container is stopped so
+the unit's `Restart=` policy recreates it from the unit definition on the new
+tag, and the update is only reported as successful once the replacement is
+observed running. That means two things are required for in-app updates of
+Quadlet containers:
+
+- the unit needs a **`Restart=` policy** (`on-failure` or `always`) in its
+  `[Service]` section, or nothing brings the container back after the stop;
+- the container must be **running** — a stopped Quadlet container has no unit
+  active, and the app will tell you to `systemctl start <unit>` first.
+
+Containers without that label are unaffected. If you prefer the unit to own its
+own updates entirely, keep `AutoUpdate=registry` and `podman-auto-update.timer`
+above — the app will still track and show what is available.
 
 ## Multi-host
 
