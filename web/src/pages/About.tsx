@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
+import { formatVersion } from '@/lib/utils'
 import { Badge, Card, CardHeader } from '@/components/ui'
 import chickenlegs from '@/assets/chickenlegs.png'
 
@@ -80,7 +81,9 @@ export default function About() {
         <CardHeader
           title="The project"
           subtitle="What WhatsNewDock is and why it exists."
-          action={data?.version ? <Badge variant="muted">v{data.version}</Badge> : undefined}
+          action={
+            data?.version ? <Badge variant="muted">{formatVersion(data.version)}</Badge> : undefined
+          }
         />
         <div className="space-y-5 p-5">
           <p className="text-sm leading-relaxed text-muted-foreground">

@@ -1,3 +1,17 @@
+/**
+ * Render a build version for display.
+ *
+ * The value is injected at build time and varies by how it was built: a release
+ * tag (`v0.1.1`), a `git describe` string (`v0.1.1-3-gabc1234`), a branch name
+ * (`main`) or `dev`. Only a bare semver gets a `v` prefix, so an already-tagged
+ * version is never doubled up into `vv0.1.1`.
+ */
+export function formatVersion(version: string): string {
+  const v = version.trim()
+  if (!v) return ''
+  return /^\d+\.\d+/.test(v) ? `v${v}` : v
+}
+
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes <= 0) return '—'
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
