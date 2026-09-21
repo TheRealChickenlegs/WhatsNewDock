@@ -6,13 +6,19 @@
     <meta name="color-scheme" content="dark light" />
     <title>WhatsNewDock</title>
     <!--
-      Web fonts are deliberately NOT loaded from a third party: the server sends
-      a strict Content-Security-Policy (default-src 'self'), so an external
-      stylesheet would be blocked in production anyway — and a self-hosted
-      monitor should not make every dashboard load call out to the internet.
-      The UI uses the system font stack (see src/index.css); self-host Inter and
-      JetBrains Mono into web/public/fonts and add @font-face rules to use them.
+      Inter and JetBrains Mono are loaded from Google Fonts. The server's
+      Content-Security-Policy allows exactly these two origins for stylesheets
+      and fonts respectively (see securityHeaders in internal/server/middleware.go)
+      and nothing else from a third party. To avoid the external request, self-host
+      the woff2 files under web/public/fonts and replace these tags with
+      @font-face rules in src/index.css.
     -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

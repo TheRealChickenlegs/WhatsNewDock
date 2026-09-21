@@ -47,11 +47,25 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		// Everything stays same-origin except the webfonts in index.html:
+		// Google Fonts serves the @font-face stylesheet from fonts.googleapis.com
+		// and the font files themselves from fonts.gstatic.com. Every other
+		// remote origin — scripts, images, connections — remains blocked.
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+			"default-src 'self'; img-src 'self' data:; "+
+				"style-src 'self' 'unsafe-inline' "+fontStyleHost+"; "+
+				"font-src 'self' "+fontFileHost+"; "+
+				"script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
+
+// Origins the UI loads webfonts from. Kept next to the policy so
+// TestTemplateAssetsAreAllowed can check the template against it.
+const (
+	fontStyleHost = "https://fonts.googleapis.com"
+	fontFileHost  = "https://fonts.gstatic.com"
+)
 
 // requestLogger logs each request at debug level.
 func requestLogger(next http.Handler) http.Handler {

@@ -399,9 +399,12 @@ node scripts/responsive-audit.mjs                       # BASE=http://127.0.0.1:
 
 Screenshots of every page/viewport land in `/tmp/wnd-ui/shots`.
 
-Note that the server sends `default-src 'self'`, so the UI deliberately loads no
-fonts or scripts from a CDN — it uses the system font stack. To use Inter and
-JetBrains Mono, self-host them under `web/public/` and add `@font-face` rules.
+Note that the server sends a strict CSP (`default-src 'self'`). The only
+third-party origins it permits are the webfont ones — `fonts.googleapis.com`
+for the stylesheet and `fonts.gstatic.com` for the files — so Inter and
+JetBrains Mono load, and nothing else off-site can. To remove even that, self-host
+the woff2 files under `web/public/` and replace the `<link>` tags in
+`web/index.html` with `@font-face` rules.
 
 ### Testing the update flow against a real runtime
 
