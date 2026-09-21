@@ -1,17 +1,30 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Layers } from 'lucide-react'
+import { Layers, X } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
 import type { Container, Server, Stack } from '@/lib/types'
-import { Badge, Card, Loading, EmptyState } from '@/components/ui'
+import { Badge, Button, Card, Loading, EmptyState, Select } from '@/components/ui'
 
 export default function Stacks() {
   const navigate = useNavigate()
   const { data: stacks, loading } = useFetch<Stack[]>('/api/v1/stacks', 20000)
   const { data: servers } = useFetch<Server[]>('/api/v1/servers')
   const { data: containers } = useFetch<Container[]>('/api/v1/containers', 20000)
+  const [server, setServer] = useState('')
 
   const serverName = (id: string) => (servers || []).find((s) => s.id === id)?.name || id
+
+  const list = useMemo(
+    () => (stacks || []).filter((s) => !server || s.server_id === server),
+    [stacks, server],
+  )
+
+  // Only offer servers that actually have stacks, so the list stays useful on a
+  // large deployment.
+  const serverOptions = useMemo(() => {
+    const seen = new Set((stacks || []).map((s) => s.server_id))
+    return (servers || []).filter((s) => seen.has(s.id))
+  }, [stacks, servers])
 
   // Swarm stacks are built from services, and every service is a set of task
   // containers we already have — so the hierarchy is derived here rather than
@@ -44,14 +57,58 @@ export default function Stacks() {
         </p>
       </div>
 
-      {(stacks || []).length === 0 ? (
+      {(stacks || []).length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
+          <Select
+            className="min-w-0 max-w-full flex-1 sm:w-56 sm:flex-none"
+            value={server}
+            onChange={(e) => setServer(e.target.value)}
+            aria-label="Filter by server"
+          >
+            <option value="">All servers</option>
+            {serverOptions.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </Select>
+          {server && (
+            <Button
+              variant="ghost"
+              size="icon"
+              title="Clear filter"
+              aria-label="Clear server filter"
+              onClick={() => setServer('')}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+          <Badge variant="muted">
+            {list.length} stack{list.length === 1 ? '' : 's'}
+            {server ? ` on ${serverName(server)}` : ''}
+          </Badge>
+        </div>
+      )}
+
+      {list.length === 0 ? (
         <EmptyState
-          title="No stacks"
-          hint="Stacks are detected from Compose project labels or Swarm stack namespaces."
+          title={server ? 'No stacks on this server' : 'No stacks'}
+          hint={
+            server
+              ? 'This server has no Compose projects or Swarm stacks right now.'
+              : 'Stacks are detected from Compose project labels or Swarm stack namespaces.'
+          }
+          action={
+            server ? (
+              <Button variant="secondary" onClick={() => setServer('')}>
+                Show all servers
+              </Button>
+            ) : undefined
+          }
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {(stacks || []).map((s) => (
+          {list.map((s) => (
             <Card
               key={s.id}
               className="cursor-pointer p-5 transition-colors hover:bg-card-hover"
