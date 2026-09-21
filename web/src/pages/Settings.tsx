@@ -3,9 +3,15 @@ import { RefreshCw, Plus, Trash2, KeyRound, ShieldCheck } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
 import { api } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
-import type { Settings as SettingsData, User, AuthSettings, AuthSettingsUpdate } from '@/lib/types'
+import type {
+  Settings as SettingsData,
+  SelfUpdate as SelfUpdateStatus,
+  User,
+  AuthSettings,
+  AuthSettingsUpdate,
+} from '@/lib/types'
 import { Badge, Button, Card, CardHeader, Input, Label, Select, Toggle, Loading } from '@/components/ui'
-import { formatDate } from '@/lib/utils'
+import { formatDate, timeAgo } from '@/lib/utils'
 
 export default function Settings() {
   const { me } = useAuth()
@@ -28,9 +34,120 @@ export default function Settings() {
         </p>
       </div>
       <UpdateSettings />
+      <SelfUpdateSettings />
       <UserManagement />
       <AuthSettingsForm />
     </div>
+  )
+}
+
+/**
+ * Self-update checking: whether WhatsNewDock watches for its own newer releases
+ * and how often. It is a separate card because it is about this app, not about
+ * the containers it monitors.
+ */
+function SelfUpdateSettings() {
+  const { data, loading, refetch } = useFetch<SettingsData>('/api/v1/settings')
+  const { data: status, refetch: refetchStatus } = useFetch<SelfUpdateStatus>('/api/v1/selfupdate')
+  const [enabled, setEnabled] = useState(true)
+  const [interval, setInterval] = useState('24h')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    if (data) {
+      setEnabled(data.self_update)
+      setInterval(data.self_update_interval)
+    }
+  }, [data])
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await api.put('/api/v1/settings', {
+        self_update: enabled,
+        self_update_interval: interval,
+      })
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2500)
+      refetch()
+      refetchStatus()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const checkNow = async () => {
+    setChecking(true)
+    try {
+      await api.post('/api/v1/selfupdate/check')
+      refetchStatus()
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  if (loading && !data) return <Loading />
+
+  return (
+    <Card>
+      <CardHeader
+        title="WhatsNewDock self-update"
+        subtitle="Whether this app checks for its own newer releases."
+        action={
+          <Button variant="secondary" onClick={checkNow} loading={checking}>
+            <RefreshCw className="h-4 w-4" /> Check now
+          </Button>
+        }
+      />
+      <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
+        <div>
+          <Label>Check for new versions</Label>
+          <label className="flex w-full items-center justify-between rounded-lg border border-border bg-background px-3 py-2.5">
+            <span className="text-sm text-foreground">{enabled ? 'Enabled' : 'Disabled'}</span>
+            <Toggle checked={enabled} onChange={setEnabled} />
+          </label>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            Checks the GitHub releases for{' '}
+            <span className="font-mono">{status?.repo || 'this project'}</span>. Nothing is
+            downloaded unless you press Update.
+          </p>
+        </div>
+        <div>
+          <Label>Check frequency</Label>
+          <Input
+            value={interval}
+            onChange={(e) => setInterval(e.target.value)}
+            placeholder="24h"
+            className="font-mono"
+            disabled={!enabled}
+          />
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Go duration, minimum 1h. Default 24h.
+          </p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-4">
+        <div className="text-xs text-muted-foreground">
+          {status?.update_available ? (
+            <span className="text-success">
+              {status.current} → <span className="font-medium">{status.latest}</span> available
+            </span>
+          ) : status?.error ? (
+            <span className="text-warning">Last check failed: {status.error}</span>
+          ) : status?.checked_at ? (
+            <span>Up to date — last checked {timeAgo(status.checked_at)}</span>
+          ) : (
+            <span>Not checked yet.</span>
+          )}
+        </div>
+        <Button onClick={save} loading={saving}>
+          {saved ? 'Saved' : 'Save changes'}
+        </Button>
+      </div>
+    </Card>
   )
 }
 
@@ -39,6 +156,8 @@ function UpdateSettings() {
   const [changelogCount, setChangelogCount] = useState(5)
   const [includePre, setIncludePre] = useState(false)
   const [interval, setInterval] = useState('6h')
+  const [selfUpdate, setSelfUpdate] = useState(true)
+  const [selfUpdateInterval, setSelfUpdateInterval] = useState('24h')
   const [ignoreImages, setIgnoreImages] = useState('')
   const [githubToken, setGithubToken] = useState('')
   const [gitlabToken, setGitlabToken] = useState('')
@@ -51,6 +170,8 @@ function UpdateSettings() {
       setChangelogCount(data.changelog_count)
       setIncludePre(data.include_prereleases)
       setInterval(data.update_interval)
+      setSelfUpdate(data.self_update)
+      setSelfUpdateInterval(data.self_update_interval)
       setIgnoreImages((data.ignore_images || []).join(', '))
     }
   }, [data])
@@ -62,6 +183,8 @@ function UpdateSettings() {
         changelog_count: changelogCount,
         include_prereleases: includePre,
         update_interval: interval,
+        self_update: selfUpdate,
+        self_update_interval: selfUpdateInterval,
         ignore_images: ignoreImages
           .split(',')
           .map((s) => s.trim())

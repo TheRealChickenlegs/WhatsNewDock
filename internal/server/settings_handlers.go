@@ -19,6 +19,8 @@ const (
 	setGitHubToken        = "settings.github_token"
 	setGitLabToken        = "settings.gitlab_token"
 	setUpdateInterval     = "settings.update_interval"
+	setSelfUpdateEnabled  = "settings.self_update"
+	setSelfUpdateInterval = "settings.self_update_interval"
 )
 
 func (s *Server) loadRuntimeSettings() error {
@@ -40,6 +42,14 @@ func (s *Server) loadRuntimeSettings() error {
 	if v, err := s.st.GetSetting(setGitLabToken); err == nil && v != "" {
 		s.cfg.Updates.GitLabToken = v
 		s.ch.SetGitLabToken(v)
+	}
+	if v, err := s.st.GetSetting(setSelfUpdateEnabled); err == nil && v != "" {
+		s.cfg.SelfUpdate.Enabled = v == "1" || v == "true"
+	}
+	if v, err := s.st.GetSetting(setSelfUpdateInterval); err == nil && v != "" {
+		if d, e := time.ParseDuration(v); e == nil && d > 0 {
+			s.cfg.SelfUpdate.Interval = d
+		}
 	}
 	return nil
 }
@@ -64,22 +74,31 @@ func (s *Server) saveRuntimeSettings() error {
 			return err
 		}
 	}
+	if err := s.st.SetSetting(setSelfUpdateEnabled, strconv.FormatBool(s.cfg.SelfUpdate.Enabled)); err != nil {
+		return err
+	}
+	if err := s.st.SetSetting(setSelfUpdateInterval, s.cfg.SelfUpdate.Interval.String()); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"changelog_count":     s.cfg.Updates.ChangelogCount,
-		"include_prereleases": s.cfg.Updates.IncludePreReleases,
-		"ignore_images":       s.cfg.Updates.IgnoreImages,
-		"update_interval":     s.cfg.Updates.Interval.String(),
-		"github_token_set":    s.cfg.Updates.GitHubToken != "",
-		"gitlab_token_set":    s.cfg.Updates.GitLabToken != "",
-		"auth_mode":           string(s.cfg.Auth.Mode),
-		"oidc_enabled":        s.auth.OIDCEnabled(),
-		"oidc_issuer":         s.cfg.Auth.OIDC.IssuerURL,
-		"enable_recreate":     s.cfg.Docker.EnableRecreate,
-		"base_url":            s.cfg.BaseURL,
+		"changelog_count":      s.cfg.Updates.ChangelogCount,
+		"include_prereleases":  s.cfg.Updates.IncludePreReleases,
+		"ignore_images":        s.cfg.Updates.IgnoreImages,
+		"update_interval":      s.cfg.Updates.Interval.String(),
+		"github_token_set":     s.cfg.Updates.GitHubToken != "",
+		"gitlab_token_set":     s.cfg.Updates.GitLabToken != "",
+		"auth_mode":            string(s.cfg.Auth.Mode),
+		"oidc_enabled":         s.auth.OIDCEnabled(),
+		"oidc_issuer":          s.cfg.Auth.OIDC.IssuerURL,
+		"enable_recreate":      s.cfg.Docker.EnableRecreate,
+		"base_url":             s.cfg.BaseURL,
+		"self_update":          s.cfg.SelfUpdate.Enabled,
+		"self_update_interval": s.cfg.SelfUpdate.Interval.String(),
+		"self_update_repo":     s.cfg.SelfUpdate.Repo,
 	})
 }
 
@@ -88,6 +107,8 @@ type settingsRequest struct {
 	IncludePreReleases *bool    `json:"include_prereleases"`
 	IgnoreImages       []string `json:"ignore_images"`
 	UpdateInterval     *string  `json:"update_interval"`
+	SelfUpdate         *bool    `json:"self_update"`
+	SelfUpdateInterval *string  `json:"self_update_interval"`
 	GitHubToken        string   `json:"github_token"`
 	GitLabToken        string   `json:"gitlab_token"`
 }
@@ -118,6 +139,17 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.cfg.Updates.Interval = d
+	}
+	if req.SelfUpdate != nil {
+		s.cfg.SelfUpdate.Enabled = *req.SelfUpdate
+	}
+	if req.SelfUpdateInterval != nil && *req.SelfUpdateInterval != "" {
+		d, err := time.ParseDuration(*req.SelfUpdateInterval)
+		if err != nil || d < time.Hour {
+			writeError(w, http.StatusBadRequest, "invalid self_update_interval (minimum 1h)")
+			return
+		}
+		s.cfg.SelfUpdate.Interval = d
 	}
 	// Tokens: only update when a non-empty value is supplied.
 	if req.GitHubToken != "" {

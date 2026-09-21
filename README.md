@@ -161,6 +161,36 @@ sudo systemctl start whatsnewdock
 See [`deploy/quadlet/README.md`](deploy/quadlet/README.md) for secrets files,
 rootless setup, SELinux and volume-ownership notes, and auto-updates.
 
+### Updating WhatsNewDock itself
+
+The app watches for its own newer releases and, when it finds one, shows a card
+at the base of the sidebar: *new version detected, v0.1.1 → v0.1.2*, with the
+release notes and an **Update now** button. The check is on by default and runs
+every 24 hours; both can be changed in **Settings → WhatsNewDock self-update**
+(or with `WND_SELF_UPDATE` / `WND_SELF_UPDATE_INTERVAL`).
+
+A container cannot recreate itself — the stop/rename/create/start sequence kills
+the process driving it halfway through — so the work is handed to a short-lived
+**helper container** started from the image that is already on the host. The
+helper replaces this container with the new image and exits; the app goes down
+for a few seconds and comes back on the new version, with the same name, ports,
+volumes and settings. The page polls until the new version answers and then
+reloads itself.
+
+Things worth knowing:
+
+- The check only reads GitHub's releases for this repository. Nothing is
+  downloaded until you press Update.
+- The update needs write access to containers and images, which the bundled
+  socket proxy already grants (`POST=1`). It needs no new permission.
+- It will not offer an update for a build it cannot order against a release — a
+  `:latest` or locally built `dev` image never nags.
+- If the app cannot identify its own container, or has no Docker access at all,
+  the card explains to update from the host instead:
+  `docker compose pull && docker compose up -d`.
+- Set `WND_SELF_UPDATE_IMAGE` to pin exactly what a self-update deploys, if the
+  tag in the running container is not the one you want.
+
 ### Docker Swarm (read-only by default)
 
 Swarm hosts are monitored out of the box. Task containers carry the
@@ -289,6 +319,10 @@ optional **YAML config file** (`--config /path/to/config.yaml` or
 | `WND_GITLAB_TOKEN` | *(empty)* | GitLab token for private/self-hosted repos |
 | `WND_INCLUDE_PRERELEASES` | `false` | Offer pre-releases as updates |
 | `WND_IGNORE_IMAGES` | *(empty)* | Comma-separated image globs never offered for update |
+| `WND_SELF_UPDATE` | `true` | Check for newer WhatsNewDock releases |
+| `WND_SELF_UPDATE_INTERVAL` | `24h` | How often to check (minimum 1h) |
+| `WND_SELF_UPDATE_REPO` | `TheRealChickenlegs/WhatsNewDock` | Repository whose releases are followed |
+| `WND_SELF_UPDATE_IMAGE` | *(empty)* | Pin the image a self-update deploys, overriding the running container's tag |
 
 ### Authentication
 

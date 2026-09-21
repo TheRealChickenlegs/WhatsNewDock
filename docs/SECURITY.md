@@ -92,6 +92,24 @@ it is guarded accordingly:
   `containers`, `images` and — when one-click updates are enabled — container
   create/start/stop/rename and image pull.
 
+### WhatsNewDock's own updater
+
+The self-update check is read-only: it fetches this project's public GitHub
+releases and compares the tag with the version the binary was built with. It
+creates nothing and changes nothing.
+
+Applying an update does create one container: a short-lived helper, from the
+image already on the host, which replaces this container with the new one and
+then removes itself. That is the same `POST /containers/create` + `/start` the
+container-update feature already uses — no new permission — and the helper is
+given the Docker socket only when this container itself was given the socket;
+under the bundled socket proxy it gets network access instead, and no volumes.
+
+The helper never receives the data volume, so it cannot read or write the
+database. It is labelled `com.whatsnewdock.role=self-update` so it is easy to
+spot in `docker ps`, and it is created with `AutoRemove` so a failed attempt
+does not leave litter behind.
+
 ### Docker Swarm
 
 Swarm **monitoring** needs no new permission: task containers carry the

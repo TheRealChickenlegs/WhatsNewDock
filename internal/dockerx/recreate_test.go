@@ -40,6 +40,11 @@ type fakeDaemon struct {
 	nextID     int
 	actions    []string
 
+	// createdCfg records the last container config passed to ContainerCreate,
+	// so tests can assert what we asked the daemon to build.
+	createdCfg  *container.Config
+	createdHost *container.HostConfig
+
 	failRenameAt string // container id whose rename fails
 	failCreate   bool
 	failStartAt  string // container id whose start fails
@@ -251,9 +256,11 @@ func (d *fakeDaemon) ContainerRename(_ context.Context, id, newName string) erro
 	return nil
 }
 
-func (d *fakeDaemon) ContainerCreate(_ context.Context, cfg *container.Config, _ *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
+func (d *fakeDaemon) ContainerCreate(_ context.Context, cfg *container.Config, hostCfg *container.HostConfig, _ *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.createdCfg = cfg
+	d.createdHost = hostCfg
 	if d.failCreate {
 		return container.CreateResponse{}, errors.New("create refused")
 	}

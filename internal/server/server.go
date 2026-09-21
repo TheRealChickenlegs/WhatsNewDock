@@ -20,6 +20,7 @@ import (
 	"github.com/whatsnewdock/whatsnewdock/internal/changelog"
 	"github.com/whatsnewdock/whatsnewdock/internal/config"
 	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
+	"github.com/whatsnewdock/whatsnewdock/internal/selfupdate"
 	"github.com/whatsnewdock/whatsnewdock/internal/server/auth"
 	"github.com/whatsnewdock/whatsnewdock/internal/store"
 	"github.com/whatsnewdock/whatsnewdock/internal/updater"
@@ -47,6 +48,27 @@ type Server struct {
 	trustedProxies []*net.IPNet
 	loginLimiter   *loginLimiter
 	jobs           *jobTracker
+	// selfUpdate checks whether a newer WhatsNewDock release exists. It never
+	// touches this deployment; applying an update is a separate user action.
+	selfUpdate *selfupdate.Checker
+}
+
+// selfUpdateImage is the image the running container was created from, used to
+// redeploy onto a newer tag. Empty when we cannot tell.
+func (s *Server) selfUpdateImage(ctx context.Context) string {
+	if s.cfg.SelfUpdate.Image != "" {
+		return s.cfg.SelfUpdate.Image
+	}
+	id := dockerx.SelfContainerID()
+	if id == "" || s.docker == nil {
+		return ""
+	}
+	insp, err := s.docker.ContainerImage(ctx, id)
+	if err != nil {
+		slog.Debug("cannot determine own image", "err", err)
+		return ""
+	}
+	return insp
 }
 
 // New builds a server, opening storage and wiring dependencies.
@@ -96,6 +118,15 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		loginLimiter:   newLoginLimiter(),
 		jobs:           newJobTracker(),
 	}
+	s.selfUpdate = selfupdate.New(version, func(ctx context.Context) (*selfupdate.Release, error) {
+		rel, err := ch.LatestRelease(ctx, cfg.SelfUpdate.Repo)
+		if err != nil || rel == nil {
+			return nil, err
+		}
+		return &selfupdate.Release{
+			Tag: rel.Tag, URL: rel.URL, Name: rel.Title, PublishedAt: rel.PublishedAt,
+		}, nil
+	})
 
 	if err := s.bootstrap(); err != nil {
 		_ = st.Close()
@@ -216,6 +247,12 @@ func (s *Server) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		s.offlineMarkerLoop(ctx)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.selfUpdateLoop(ctx)
 	}()
 
 	srv := &http.Server{
@@ -394,6 +431,46 @@ func (s *Server) markOfflineServers() {
 			_ = s.st.MarkServerOffline(srv.ID)
 		}
 	}
+}
+
+// selfUpdateLoop checks for a newer WhatsNewDock release. The interval is read
+// every cycle so a change in Settings takes effect without a restart.
+func (s *Server) selfUpdateLoop(ctx context.Context) {
+	// A short first delay keeps startup quiet and lets the UI come up first.
+	first := time.NewTimer(time.Minute)
+	defer first.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-first.C:
+		case <-time.After(s.selfUpdateInterval()):
+		}
+		if !s.cfg.SelfUpdate.Enabled {
+			continue
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		res := s.selfUpdate.Check(checkCtx)
+		cancel()
+		if res.Error != "" {
+			slog.Debug("self-update check failed", "err", res.Error)
+			continue
+		}
+		if res.UpdateAvailable {
+			slog.Info("a newer WhatsNewDock release is available",
+				"current", res.Current, "latest", res.Latest, "url", res.URL)
+		}
+	}
+}
+
+// selfUpdateInterval is the configured check interval, floored at an hour so a
+// typo cannot hammer the GitHub API.
+func (s *Server) selfUpdateInterval() time.Duration {
+	d := s.cfg.SelfUpdate.Interval
+	if d < time.Hour {
+		return time.Hour
+	}
+	return d
 }
 
 // triggerCheck runs an update check on demand (used by the API).

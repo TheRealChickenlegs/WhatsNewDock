@@ -145,6 +145,24 @@ export interface UpdateProgress {
   message: string
 }
 
+/** What the app knows about its own newer releases. */
+export interface SelfUpdate {
+  current: string
+  latest: string
+  update_available: boolean
+  url?: string
+  name?: string
+  published_at?: string
+  checked_at?: string
+  error?: string
+  enabled: boolean
+  interval: string
+  repo: string
+  /** False when the app cannot identify or reach its own container. */
+  can_apply: boolean
+  current_image?: string
+}
+
 export interface Settings {
   changelog_count: number
   include_prereleases: boolean
@@ -157,6 +175,9 @@ export interface Settings {
   oidc_issuer: string
   enable_recreate: boolean
   base_url: string
+  self_update: boolean
+  self_update_interval: string
+  self_update_repo: string
 }
 
 export interface AuthSettings {

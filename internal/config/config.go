@@ -21,7 +21,26 @@ type Mode string
 const (
 	ModeServer Mode = "server"
 	ModeAgent  Mode = "agent"
+	// ModeSelfUpdate is the short-lived helper that redeploys the app onto a
+	// newer image. It is not a user-facing mode.
+	ModeSelfUpdate Mode = "selfupdate"
 )
+
+// DefaultSelfUpdateRepo is the repository whose releases the app follows.
+const DefaultSelfUpdateRepo = "TheRealChickenlegs/WhatsNewDock"
+
+// SelfUpdateConfig controls the app's check for its own newer releases.
+type SelfUpdateConfig struct {
+	// Enabled turns the periodic check on. Default true.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Interval is how often the check runs. Default 24h.
+	Interval time.Duration `yaml:"interval" json:"interval"`
+	// Repo is the GitHub repository whose releases are checked.
+	Repo string `yaml:"repo" json:"repo"`
+	// Image, when set, overrides the image reference used to redeploy the app.
+	// By default it is derived from the running container.
+	Image string `yaml:"image" json:"image"`
+}
 
 // AuthMode describes which authentication mechanisms are enabled.
 type AuthMode string
@@ -45,10 +64,12 @@ type Config struct {
 	// X-Forwarded-* headers when behind a reverse proxy.
 	TrustedProxies string `yaml:"trusted_proxies" json:"trusted_proxies"`
 
-	Docker  DockerConfig  `yaml:"docker"  json:"docker"`
-	Agent   AgentConfig   `yaml:"agent"   json:"agent"`
-	Updates UpdatesConfig `yaml:"updates" json:"updates"`
-	Auth    AuthConfig    `yaml:"auth"    json:"auth"`
+	Docker DockerConfig `yaml:"docker"  json:"docker"`
+	// SelfUpdate governs the check for newer releases of WhatsNewDock itself.
+	SelfUpdate SelfUpdateConfig `yaml:"self_update" json:"self_update"`
+	Agent      AgentConfig      `yaml:"agent"   json:"agent"`
+	Updates    UpdatesConfig    `yaml:"updates" json:"updates"`
+	Auth       AuthConfig       `yaml:"auth"    json:"auth"`
 
 	// InitialAdminUser/InitialAdminPassword bootstrap the first local admin
 	// account when the user table is empty.
@@ -157,6 +178,11 @@ func Default() *Config {
 		Updates: UpdatesConfig{
 			Interval:       6 * time.Hour,
 			ChangelogCount: 5,
+		},
+		SelfUpdate: SelfUpdateConfig{
+			Enabled:  true,
+			Interval: 24 * time.Hour,
+			Repo:     DefaultSelfUpdateRepo,
 		},
 		Auth: AuthConfig{
 			Mode:       AuthLocal,
@@ -299,6 +325,10 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Updates.GitHubToken, "WND_GITHUB_TOKEN")
 	setString(&cfg.Updates.GitLabToken, "WND_GITLAB_TOKEN")
 	setBool(&cfg.Updates.IncludePreReleases, "WND_INCLUDE_PRERELEASES")
+	setBool(&cfg.SelfUpdate.Enabled, "WND_SELF_UPDATE")
+	setDur(&cfg.SelfUpdate.Interval, "WND_SELF_UPDATE_INTERVAL")
+	setString(&cfg.SelfUpdate.Repo, "WND_SELF_UPDATE_REPO")
+	setString(&cfg.SelfUpdate.Image, "WND_SELF_UPDATE_IMAGE")
 	if v := os.Getenv("WND_IGNORE_IMAGES"); v != "" {
 		cfg.Updates.IgnoreImages = splitList(v)
 	}
@@ -334,9 +364,9 @@ func splitList(v string) []string {
 // Validate checks the configuration for consistency.
 func (c *Config) Validate() error {
 	switch c.Mode {
-	case ModeServer, ModeAgent:
+	case ModeServer, ModeAgent, ModeSelfUpdate:
 	default:
-		return fmt.Errorf("invalid mode %q (want server or agent)", c.Mode)
+		return fmt.Errorf("invalid mode %q (want server, agent or selfupdate)", c.Mode)
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("invalid port %d", c.Port)

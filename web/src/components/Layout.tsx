@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { useAuth } from '@/context/AuthContext'
+import SelfUpdateCard from '@/components/SelfUpdateCard'
 import { cx } from '@/lib/utils'
 import { useEffect, useState } from 'react'
 
@@ -131,6 +132,10 @@ export default function Layout() {
           </NavLink>
         ))}
       </nav>
+
+      {/* Sits directly above the account block; renders nothing unless a newer
+          release has actually been published. */}
+      <SelfUpdateCard />
 
       <div className="border-t border-border p-3">
         <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
