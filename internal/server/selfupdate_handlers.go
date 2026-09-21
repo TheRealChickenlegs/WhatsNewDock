@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
@@ -61,8 +60,10 @@ func (s *Server) handleApplySelfUpdate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "self-update needs a Docker connection; this instance has none")
 		return
 	}
+	// A build update has no version pair (Latest is empty by design), so the
+	// only thing that decides whether there is anything to do is the signal.
 	res := s.selfUpdate.Cached()
-	if !res.UpdateAvailable || res.Latest == "" {
+	if !res.UpdateAvailable {
 		writeError(w, http.StatusConflict, "no newer version is known; run a check first")
 		return
 	}
@@ -77,17 +78,14 @@ func (s *Server) handleApplySelfUpdate(w http.ResponseWriter, r *http.Request) {
 	// Redeploy onto the image reference we are already using, with the tag
 	// swapped: that keeps the registry and repository the operator chose rather
 	// than assuming ghcr.io.
-	currentImage := s.selfUpdateImage(r.Context())
-	target := retagImage(currentImage, res.Latest)
+	// The check already worked out what to deploy: the release tag for a new
+	// release, or the same reference re-pulled for a rebuilt tag.
+	target := res.Target
 	if s.cfg.SelfUpdate.Image != "" {
 		target = s.cfg.SelfUpdate.Image
 	}
 	if target == "" {
 		writeError(w, http.StatusConflict, "cannot determine which image to deploy")
-		return
-	}
-	if target == currentImage {
-		writeError(w, http.StatusConflict, "already running "+target)
 		return
 	}
 
@@ -105,6 +103,7 @@ func (s *Server) handleApplySelfUpdate(w http.ResponseWriter, r *http.Request) {
 		"started": true,
 		"from":    res.Current,
 		"to":      target,
+		"kind":    res.Kind,
 	})
 }
 
@@ -113,22 +112,4 @@ func selfUpdateActor(r *http.Request, s *Server) string {
 		return u.Username
 	}
 	return "system"
-}
-
-// retagImage replaces the tag or digest of an image reference, keeping the
-// registry and repository. It returns "" when the reference cannot be parsed.
-func retagImage(image, tag string) string {
-	if image == "" || tag == "" {
-		return ""
-	}
-	// Strip any existing digest, then the tag.
-	base := image
-	if i := strings.IndexByte(base, '@'); i >= 0 {
-		base = base[:i]
-	}
-	// A colon after the last slash is a tag; one before it is a registry port.
-	if i := strings.LastIndexByte(base, ':'); i > strings.LastIndexByte(base, '/') {
-		base = base[:i]
-	}
-	return base + ":" + tag
 }

@@ -177,14 +177,28 @@ for a few seconds and comes back on the new version, with the same name, ports,
 volumes and settings. The page polls until the new version answers and then
 reloads itself.
 
+There are two things it can detect, and the card says which:
+
+- **A newer release** (`:0.1.1` → `:v0.1.2`) — the version pair is shown, and the
+  update deploys the release tag. This pins the container to that release, so
+  update the tag in your compose file too: a later `docker compose up -d` would
+  otherwise put the old version back.
+- **A rebuilt tag** (`:latest` has moved) — a moving tag keeps the same version
+  string forever, so this compares the digest you are running against the digest
+  the registry now serves for the same reference, and the update re-pulls **that
+  same tag**. It can never move you backwards.
+
 Things worth knowing:
 
 - The check only reads GitHub's releases for this repository. Nothing is
   downloaded until you press Update.
 - The update needs write access to containers and images, which the bundled
   socket proxy already grants (`POST=1`). It needs no new permission.
-- It will not offer an update for a build it cannot order against a release — a
-  `:latest` or locally built `dev` image never nags.
+- A locally built image has no registry digest to compare, so it is never
+  offered an update — the card only appears for images pulled from a registry.
+- A build described as `v0.1.1-3-gabc1234` (main, three commits past that tag)
+  counts as *containing* v0.1.1, so it is never offered the older tag as an
+  "update".
 - If the app cannot identify its own container, or has no Docker access at all,
   the card explains to update from the host instead:
   `docker compose pull && docker compose up -d`.

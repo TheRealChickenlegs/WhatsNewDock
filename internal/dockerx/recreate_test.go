@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -52,7 +53,11 @@ type fakeDaemon struct {
 	onStop       func(d *fakeDaemon) // simulates the systemd unit reacting to a stop
 
 	// Swarm service state.
-	services         map[string]*fakeService
+	services map[string]*fakeService
+	// pulledImageID is what ImageInspect reports after a pull, so a test can
+	// model "the tag moved" or "nothing changed".
+	pulledImageID string
+
 	failServiceAPI   error // e.g. a socket proxy refusing /services
 	failServiceUpd   error
 	serviceUpdCalls  []swarm.ServiceUpdateOptions
@@ -154,6 +159,16 @@ func (d *fakeDaemon) ServiceUpdate(_ context.Context, serviceID string, version 
 		svc.running = svc.desired
 	}
 	return swarm.ServiceUpdateResponse{}, nil
+}
+
+func (d *fakeDaemon) ImageInspect(_ context.Context, imageID string, _ ...client.ImageInspectOption) (image.InspectResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// The pulled reference resolves to whatever the fake was told it is.
+	if d.pulledImageID == "" {
+		return image.InspectResponse{}, errors.New("no such image: " + imageID)
+	}
+	return image.InspectResponse{ID: d.pulledImageID}, nil
 }
 
 func (d *fakeDaemon) ServiceList(_ context.Context, _ swarm.ServiceListOptions) ([]swarm.Service, error) {

@@ -17,13 +17,14 @@ func TestSelfUpdateHelperConfig(t *testing.T) {
 		EndpointsConfig: map[string]*network.EndpointSettings{"whatsnewdock": {}},
 	}
 	cfg, host := SelfUpdateHelperConfig(
-		"ghcr.io/therealchickenlegs/whatsnewdock:0.1.1", "abc123def456",
+		"sha256:abc123def456", "abc123def456",
 		"ghcr.io/therealchickenlegs/whatsnewdock:v0.1.2",
 		HelperAccess{DockerHost: "tcp://socket-proxy:2375", Network: netCfg})
 
-	// The helper runs the image that is already on the host, so the code doing
-	// the swap is the code proven to run there — not the image being deployed.
-	if cfg.Image != "ghcr.io/therealchickenlegs/whatsnewdock:0.1.1" {
+	// The helper runs the image id that is executing now, so the code doing the
+	// swap is the code proven to run here — not the tag, which the pull may have
+	// re-pointed, and not the image being deployed.
+	if cfg.Image != "sha256:abc123def456" {
 		t.Errorf("helper image = %q", cfg.Image)
 	}
 	env := strings.Join(cfg.Env, " ")
@@ -153,8 +154,9 @@ func TestStartSelfUpdateCreatesHelper(t *testing.T) {
 	if fake.createdCfg == nil {
 		t.Fatal("no helper container was created")
 	}
-	if fake.createdCfg.Image != "ghcr.io/x/whatsnewdock:0.1.1" {
-		t.Errorf("helper image = %q", fake.createdCfg.Image)
+	// Pinned to the running image id, not the tag.
+	if fake.createdCfg.Image != "sha256:self" {
+		t.Errorf("helper image = %q, want the running image id", fake.createdCfg.Image)
 	}
 	if !strings.Contains(fake.actionsString(), "create:whatsnewdock-self-update") {
 		t.Errorf("actions = %s", fake.actionsString())
@@ -168,11 +170,34 @@ func TestStartSelfUpdateCreatesHelper(t *testing.T) {
 	}
 }
 
-func TestStartSelfUpdateRefusesSameImage(t *testing.T) {
-	self := baseContainer("self1", "whatsnewdock", "ghcr.io/x/whatsnewdock:0.1.1", "sha256:self", true)
+// TestStartSelfUpdateRefusesWhenNothingMoved: re-pulling the same tag is the
+// normal path for a moving tag, so it is only a no-op when the digest is
+// unchanged too.
+func TestStartSelfUpdateRefusesWhenNothingMoved(t *testing.T) {
+	self := baseContainer("self1", "whatsnewdock", "ghcr.io/x/whatsnewdock:latest", "sha256:self", true)
 	fake := newFakeDaemon(self)
-	err := startSelfUpdate(context.Background(), fake, "self1", "ghcr.io/x/whatsnewdock:0.1.1", "tcp://p:2375")
-	if err == nil || !strings.Contains(err.Error(), "already running") {
+	fake.pulledImageID = "sha256:self" // the tag still points at what we run
+
+	err := startSelfUpdate(context.Background(), fake, "self1", "ghcr.io/x/whatsnewdock:latest", "tcp://p:2375")
+	if err == nil || !strings.Contains(err.Error(), "newest build") {
 		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(fake.actionsString(), "start:whatsnewdock-self-update") {
+		t.Errorf("a helper was started for an unchanged image: %s", fake.actionsString())
+	}
+}
+
+// TestStartSelfUpdateRedeploysMovedTag is the :latest case: the reference is
+// identical, the image behind it is not, and that must deploy.
+func TestStartSelfUpdateRedeploysMovedTag(t *testing.T) {
+	self := baseContainer("self1", "whatsnewdock", "ghcr.io/x/whatsnewdock:latest", "sha256:self", true)
+	fake := newFakeDaemon(self)
+	fake.pulledImageID = "sha256:new"
+
+	if err := startSelfUpdate(context.Background(), fake, "self1", "ghcr.io/x/whatsnewdock:latest", "tcp://p:2375"); err != nil {
+		t.Fatalf("startSelfUpdate: %v", err)
+	}
+	if !strings.Contains(fake.actionsString(), "start:whatsnewdock-self-update") {
+		t.Errorf("helper not started for a moved tag: %s", fake.actionsString())
 	}
 }

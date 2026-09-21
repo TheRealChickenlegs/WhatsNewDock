@@ -149,6 +149,14 @@ export interface UpdateProgress {
 export interface SelfUpdate {
   current: string
   latest: string
+  /** Which signal found the update: a newer release, or a rebuilt tag. */
+  kind?: 'release' | 'build'
+  /** The image reference the update would deploy. */
+  target?: string
+  /** The image reference this container is running. */
+  image?: string
+  current_digest?: string
+  latest_digest?: string
   update_available: boolean
   url?: string
   name?: string

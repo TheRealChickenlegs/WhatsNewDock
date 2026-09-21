@@ -135,8 +135,9 @@ func bindDestination(bind string) string {
 // SelfUpdateHelperConfig builds the helper's container config. It is a pure
 // function so what we would create can be asserted without a daemon.
 //
-// selfImage is the image this process is running from, which the helper reuses:
-// the code doing the swap should be the code already proven to run here.
+// selfImage must be the image *id* this container is running, not its tag: by
+// the time the helper starts, the tag may already point somewhere else. The
+// code doing the swap should be the code already proven to run here.
 func SelfUpdateHelperConfig(selfImage, selfID, targetImage string, access HelperAccess) (*container.Config, *container.HostConfig) {
 	cfg := &container.Config{
 		Image: selfImage,
@@ -182,17 +183,24 @@ func startSelfUpdate(ctx context.Context, d containerDaemon, selfID, targetImage
 	if insp.Config == nil || insp.Config.Image == "" {
 		return fmt.Errorf("cannot determine the image this container runs from")
 	}
-	selfImage := insp.Config.Image
-	if selfImage == targetImage {
-		return fmt.Errorf("already running %s", targetImage)
-	}
-
 	// Pull first: nothing should be stopped until the new image is on disk.
+	// A moving tag is redeployed by pulling it again, which is also how we can
+	// tell whether anything actually changed.
 	if err := pullImage(ctx, d, targetImage, nil); err != nil {
 		return err
 	}
+	if insp.Config.Image == targetImage {
+		if img, err := d.ImageInspect(ctx, targetImage); err == nil && img.ID == insp.Image {
+			return fmt.Errorf("already running the newest build of %s", targetImage)
+		}
+	}
 
-	cfg, hostCfg := SelfUpdateHelperConfig(selfImage, selfID, targetImage,
+	// The helper is pinned to the image *id* rather than the reference: the pull
+	// above may have re-pointed the reference at the new image, and then the
+	// helper would run code that has never executed here — or, for a moving tag
+	// pointing at an older release, code that does not know how to redeploy at
+	// all. The point of the helper is that it runs the code already running.
+	cfg, hostCfg := SelfUpdateHelperConfig(insp.Image, selfID, targetImage,
 		helperAccess(insp, dockerHost))
 
 	// A helper left over from an interrupted attempt would block the name.
@@ -221,6 +229,31 @@ func (c *Client) RunSelfUpdateHelper(ctx context.Context, selfID, targetImage st
 	return c.RecreateContainer(ctx, selfID, targetImage, nil)
 }
 
+// SelfImage reports the image reference this process runs from and the digest
+// that reference resolved to. The digest is taken from the image's repo digest
+// — the value the registry served — so a locally built image, which has none,
+// is distinguishable from one pulled from a registry.
+func (c *Client) SelfImage(ctx context.Context, containerID string) (ref string, digest string, err error) {
+	insp, err := c.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", "", err
+	}
+	if insp.Config == nil || insp.Config.Image == "" {
+		return "", "", fmt.Errorf("container %s has no image reference", containerID)
+	}
+	ref = insp.Config.Image
+	// The image the container was created from, which may be an id.
+	img, err := c.cli.ImageInspect(ctx, insp.Image)
+	if err == nil && len(img.RepoDigests) > 0 {
+		if i := strings.IndexByte(img.RepoDigests[0], '@'); i >= 0 {
+			return ref, img.RepoDigests[0][i+1:], nil
+		}
+	}
+	// No repo digest means it was never pulled from a registry; the image id is
+	// all we have, and callers treat an id as "not comparable".
+	return ref, "", nil
+}
+
 // ContainerImage returns the image reference a container was created from.
 func (c *Client) ContainerImage(ctx context.Context, containerID string) (string, error) {
 	insp, err := c.cli.ContainerInspect(ctx, containerID)
@@ -231,4 +264,13 @@ func (c *Client) ContainerImage(ctx context.Context, containerID string) (string
 		return "", fmt.Errorf("container %s has no image reference", containerID)
 	}
 	return insp.Config.Image, nil
+}
+
+// imageRefDigest returns the digest a reference currently resolves to.
+func (c *Client) imageRefDigest(ctx context.Context, ref string) (string, error) {
+	img, err := c.cli.ImageInspect(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	return img.ID, nil
 }

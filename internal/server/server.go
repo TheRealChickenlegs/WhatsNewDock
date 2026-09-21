@@ -20,6 +20,7 @@ import (
 	"github.com/whatsnewdock/whatsnewdock/internal/changelog"
 	"github.com/whatsnewdock/whatsnewdock/internal/config"
 	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
+	"github.com/whatsnewdock/whatsnewdock/internal/reference"
 	"github.com/whatsnewdock/whatsnewdock/internal/selfupdate"
 	"github.com/whatsnewdock/whatsnewdock/internal/server/auth"
 	"github.com/whatsnewdock/whatsnewdock/internal/store"
@@ -59,16 +60,53 @@ func (s *Server) selfUpdateImage(ctx context.Context) string {
 	if s.cfg.SelfUpdate.Image != "" {
 		return s.cfg.SelfUpdate.Image
 	}
+	ref, _, err := s.currentImage(ctx)
+	if err != nil {
+		return ""
+	}
+	return ref
+}
+
+// currentImage resolves the image reference and digest this process runs from.
+func (s *Server) currentImage(ctx context.Context) (ref, digest string, err error) {
 	id := dockerx.SelfContainerID()
 	if id == "" || s.docker == nil {
-		return ""
+		return "", "", fmt.Errorf("this instance cannot identify its own container")
 	}
-	insp, err := s.docker.ContainerImage(ctx, id)
+	return s.docker.SelfImage(ctx, id)
+}
+
+// currentBuild describes the running build for the update check.
+func (s *Server) currentBuild(ctx context.Context) selfupdate.Current {
+	cur := selfupdate.Current{Version: s.version}
+	ref, digest, err := s.currentImage(ctx)
 	if err != nil {
-		slog.Debug("cannot determine own image", "err", err)
-		return ""
+		slog.Debug("cannot describe own image", "err", err)
+		return cur
 	}
-	return insp
+	if s.cfg.SelfUpdate.Image != "" {
+		ref = s.cfg.SelfUpdate.Image
+	}
+	cur.Image, cur.Digest = ref, digest
+	return cur
+}
+
+// imageDigestMoved reports whether the registry now serves a different manifest
+// for the image reference we are running. This is what detects a rebuilt moving
+// tag such as ":latest", where the version string never changes.
+func (s *Server) imageDigestMoved(ctx context.Context, imageRef, currentDigest string) (bool, string, error) {
+	ref, err := reference.Parse(imageRef)
+	if err != nil {
+		return false, "", err
+	}
+	upToDate, err := s.ch.ManifestUpToDate(ctx, ref.Registry, ref.Repository, ref.Tag, currentDigest)
+	if err != nil {
+		return false, "", err
+	}
+	if upToDate {
+		return false, currentDigest, nil
+	}
+	return true, "", nil
 }
 
 // New builds a server, opening storage and wiring dependencies.
@@ -118,7 +156,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		loginLimiter:   newLoginLimiter(),
 		jobs:           newJobTracker(),
 	}
-	s.selfUpdate = selfupdate.New(version, func(ctx context.Context) (*selfupdate.Release, error) {
+	s.selfUpdate = selfupdate.New(s.currentBuild, func(ctx context.Context) (*selfupdate.Release, error) {
 		rel, err := ch.LatestRelease(ctx, cfg.SelfUpdate.Repo)
 		if err != nil || rel == nil {
 			return nil, err
@@ -126,7 +164,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		return &selfupdate.Release{
 			Tag: rel.Tag, URL: rel.URL, Name: rel.Title, PublishedAt: rel.PublishedAt,
 		}, nil
-	})
+	}, s.imageDigestMoved)
 
 	if err := s.bootstrap(); err != nil {
 		_ = st.Close()

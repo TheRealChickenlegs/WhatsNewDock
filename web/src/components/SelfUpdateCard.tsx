@@ -24,7 +24,12 @@ export default function SelfUpdateCard() {
   const [started, setStarted] = useState(false)
   const [error, setError] = useState('')
 
-  if (!data || !data.update_available || !data.latest) return null
+  if (!data || !data.update_available) return null
+
+  // A release has a version pair to show; a rebuilt moving tag does not — the
+  // version string never changed, the image behind it did.
+  const isRelease = data.kind === 'release'
+  const imageTag = (data.image || '').split(':').pop() || data.image || ''
 
   const apply = async () => {
     setConfirming(false)
@@ -63,9 +68,20 @@ export default function SelfUpdateCard() {
         <div className="flex items-start gap-2">
           <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-success" />
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-semibold text-foreground">New version detected</div>
+            <div className="text-xs font-semibold text-foreground">
+              {isRelease ? 'New version detected' : 'New build available'}
+            </div>
             <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-              {formatVersion(data.current)} → <span className="text-success">{formatVersion(data.latest)}</span>
+              {isRelease ? (
+                <>
+                  {formatVersion(data.current)} →{' '}
+                  <span className="text-success">{formatVersion(data.latest)}</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-success">:{imageTag}</span> has been rebuilt
+                </>
+              )}
             </div>
 
             {started ? (
@@ -119,12 +135,29 @@ export default function SelfUpdateCard() {
         title="Update WhatsNewDock"
         message={
           <>
-            Redeploy <span className="font-mono text-foreground">{formatVersion(data.current)}</span> as{' '}
-            <span className="font-mono text-foreground">{formatVersion(data.latest)}</span>?
+            {isRelease ? (
+              <>
+                Redeploy <span className="font-mono text-foreground">{formatVersion(data.current)}</span> as{' '}
+                <span className="font-mono text-foreground">{formatVersion(data.latest)}</span>?
+              </>
+            ) : (
+              <>
+                Pull the newest build of{' '}
+                <span className="font-mono text-foreground">{data.image}</span>?
+              </>
+            )}
             <br />
             <span className="text-xs">
               The container is replaced in place — the same name, volumes and settings are kept. The
               app restarts and this page will reload when the new version answers.
+              {isRelease && data.image && (
+                <>
+                  {' '}
+                  This pins the running container to {formatVersion(data.latest)}; update the tag in
+                  your compose file too, or a later <span className="font-mono">docker compose up</span>{' '}
+                  will put the old version back.
+                </>
+              )}
             </span>
           </>
         }
