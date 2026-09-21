@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS servers (
 	tls_cert       TEXT,
 	tls_key        TEXT,
 	name_custom    INTEGER NOT NULL DEFAULT 0,
+	swarm_role     TEXT NOT NULL DEFAULT 'none',
+	swarm_services INTEGER NOT NULL DEFAULT 0,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL
 );
@@ -94,6 +96,10 @@ CREATE TABLE IF NOT EXISTS containers (
 	pinned          INTEGER NOT NULL DEFAULT 0,
 	systemd_unit    TEXT,
 	managed         INTEGER NOT NULL DEFAULT 0,
+	swarm_service_id   TEXT,
+	swarm_service_name TEXT,
+	swarm_task_id      TEXT,
+	swarm_node_id      TEXT,
 	updated_at      TEXT NOT NULL,
 	UNIQUE(server_id, docker_id)
 );
@@ -205,6 +211,23 @@ var migrations = []migration{
 		version: 3, // keep user-chosen server names across snapshot reports
 		apply: func(tx *sql.Tx) error {
 			return addColumn(tx, "servers", "name_custom", "INTEGER NOT NULL DEFAULT 0")
+		},
+	},
+	{
+		version: 4, // swarm membership
+		apply: func(tx *sql.Tx) error {
+			if err := addColumn(tx, "servers", "swarm_role", `TEXT NOT NULL DEFAULT 'none'`); err != nil {
+				return err
+			}
+			if err := addColumn(tx, "servers", "swarm_services", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+			for _, c := range []string{"swarm_service_id", "swarm_service_name", "swarm_task_id", "swarm_node_id"} {
+				if err := addColumn(tx, "containers", c, "TEXT"); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	},
 }

@@ -81,3 +81,34 @@ jobs:
       - name: Audit dependencies
         working-directory: web
         run: npm audit --audit-level=high
+
+  # The swarm service-update path cannot be proven with fakes: how the daemon
+  # reports a rollout (ServiceInspect leaves ServiceStatus nil, and a rolling
+  # update keeps running == desired throughout) only shows up against a real
+  # engine. The runner already has Docker, so this drives a throwaway
+  # single-node swarm and leaves it again.
+  swarm:
+    name: Live swarm update tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache-dependency-path: go.sum
+
+      - name: Verify the engine is available
+        run: docker version
+
+      - name: Live swarm tests
+        env:
+          WND_DOCKER_TEST_HOST: unix:///var/run/docker.sock
+        # The harness initialises a swarm, creates throwaway wnd-live-* services
+        # and always leaves the swarm on the way out. It skips itself if the
+        # daemon is already part of a swarm.
+        run: go test ./internal/dockerx/ -run LiveSwarm -v -count=1 -timeout 10m
+
+      - name: Confirm the runner's swarm state was cleaned up
+        if: always()
+        run: docker info --format 'swarm={{.Swarm.LocalNodeState}}'

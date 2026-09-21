@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/swarm"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -50,6 +51,10 @@ type containerDaemon interface {
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ImagePull(ctx context.Context, refStr string, options image.PullOptions) (io.ReadCloser, error)
+	// Swarm services, used only when the operator has opted in.
+	ServiceList(ctx context.Context, options swarm.ServiceListOptions) ([]swarm.Service, error)
+	ServiceInspectWithRaw(ctx context.Context, serviceID string, opts swarm.ServiceInspectOptions) (swarm.Service, []byte, error)
+	ServiceUpdate(ctx context.Context, serviceID string, version swarm.Version, service swarm.ServiceSpec, options swarm.ServiceUpdateOptions) (swarm.ServiceUpdateResponse, error)
 }
 
 // RecreateContainer pulls a target image and recreates the container against it,
@@ -80,6 +85,18 @@ func recreateContainer(ctx context.Context, d containerDaemon, containerID, targ
 	if unit := podmanSystemdUnit(labels); unit != "" {
 		return recreateSystemdManaged(ctx, d, insp, targetImage, unit, progress)
 	}
+
+	// A swarm task belongs to a service: the orchestrator owns its lifecycle, so
+	// the only safe update is to roll the service onto the new image. Recreating
+	// the container ourselves would race the scheduler and produce a container
+	// wearing another task's labels.
+	if sw := swarmTask(labels); sw.TaskID != "" {
+		if sw.ServiceID == "" {
+			return fmt.Errorf("container %s is a swarm task but its service is unknown", strings.TrimPrefix(insp.Name, "/"))
+		}
+		return updateService(ctx, d, sw.ServiceID, targetImage, progress)
+	}
+
 	return recreateDirect(ctx, d, insp, targetImage, progress)
 }
 

@@ -192,32 +192,72 @@ func TestExecutorForLocalWithoutDocker(t *testing.T) {
 
 func TestUpdateBlockedReason(t *testing.T) {
 	// Plain Docker/compose containers are never blocked.
-	if reason := updateBlockedReason(&store.ContainerWithUpdate{}); reason != "" {
+	if reason := updateBlockedReason(&store.ContainerWithUpdate{}, &store.Server{}); reason != "" {
 		t.Errorf("unmanaged container blocked: %q", reason)
 	}
-	// A running Quadlet container is now updatable: the recreate is handed to
-	// its systemd unit rather than being refused.
+
+	// A running Quadlet container is updatable: the recreate is handed to its
+	// systemd unit rather than being refused.
 	running := &store.ContainerWithUpdate{}
 	running.Managed = true
 	running.Running = true
 	running.SystemdUnit = "web.service"
-	if reason := updateBlockedReason(running); reason != "" {
+	if reason := updateBlockedReason(running, &store.Server{}); reason != "" {
 		t.Errorf("a running systemd-managed container should be updatable: %q", reason)
 	}
+
 	// A stopped one cannot be: the unit's teardown removed the container and
 	// the Engine API cannot start a unit.
 	stopped := &store.ContainerWithUpdate{}
 	stopped.Managed = true
 	stopped.Name = "web"
 	stopped.SystemdUnit = "web.service"
-	reason := updateBlockedReason(stopped)
+	reason := updateBlockedReason(stopped, &store.Server{})
 	if !strings.Contains(reason, "web.service") || !strings.Contains(reason, "systemctl start web.service") {
 		t.Errorf("unhelpful message: %q", reason)
 	}
 	unnamed := &store.ContainerWithUpdate{}
 	unnamed.Managed = true
 	unnamed.Name = "web"
-	if reason := updateBlockedReason(unnamed); !strings.Contains(reason, "systemd") {
+	if reason := updateBlockedReason(unnamed, &store.Server{}); !strings.Contains(reason, "systemd") {
 		t.Errorf("unhelpful message: %q", reason)
+	}
+}
+
+// TestUpdateBlockedReasonSwarm covers the opt-in boundary from the server's
+// side: a swarm task is updatable exactly when the host is a manager and the
+// operator has granted the services API.
+func TestUpdateBlockedReasonSwarm(t *testing.T) {
+	task := &store.ContainerWithUpdate{}
+	task.Managed = true
+	task.Running = true
+	task.Name = "web.1"
+	task.SwarmTaskID = "task1"
+	task.SwarmServiceID = "svc1"
+	task.SwarmServiceName = "web"
+
+	managerGranted := &store.Server{SwarmRole: store.SwarmManager, SwarmServices: true}
+	if reason := updateBlockedReason(task, managerGranted); reason != "" {
+		t.Errorf("a swarm task on a granted manager should be updatable: %q", reason)
+	}
+
+	managerDenied := &store.Server{SwarmRole: store.SwarmManager, SwarmServices: false}
+	reason := updateBlockedReason(task, managerDenied)
+	if !strings.Contains(reason, "opt-in") || !strings.Contains(reason, "SERVICES=1") {
+		t.Errorf("a denied manager should point at the opt-in: %q", reason)
+	}
+	if !strings.Contains(reason, "service web") {
+		t.Errorf("the message should name the service, not the replica: %q", reason)
+	}
+
+	worker := &store.Server{SwarmRole: store.SwarmWorker}
+	if reason := updateBlockedReason(task, worker); !strings.Contains(reason, "worker node") {
+		t.Errorf("a worker should be told to use a manager: %q", reason)
+	}
+
+	// A stale report (host no longer reporting as swarm) must not silently
+	// fall through to the container path.
+	if reason := updateBlockedReason(task, &store.Server{}); !strings.Contains(reason, "not currently reporting") {
+		t.Errorf("unexpected message: %q", reason)
 	}
 }

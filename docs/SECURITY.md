@@ -38,6 +38,7 @@ WND_DOCKER_HOST: tcp://socket-proxy:2375
 | `IMAGES` | `1` | pull the updated image |
 | `PING` / `VERSION` | `1` | API version negotiation |
 | `POST` | `1` | required for any write (pull/recreate) |
+| `SERVICES` | `0` | **opt-in**: swarm service updates. See below |
 | everything else | `0` | `EXEC`, `VOLUMES`, `SWARM`, `SECRETS`, `BUILD`, `NETWORKS`, `PLUGINS`, `SYSTEM`, `EVENTS`, `AUTH`, … |
 
 Everything not listed is denied, so a compromise of the app cannot reach
@@ -90,6 +91,30 @@ it is guarded accordingly:
   than at an exposed daemon; the server only ever needs `info`, `ping`,
   `containers`, `images` and — when one-click updates are enabled — container
   create/start/stop/rename and image pull.
+
+### Docker Swarm
+
+Swarm **monitoring** needs no new permission: task containers carry the
+`com.docker.swarm.*` labels, which the app already stores, so stacks, services
+and tasks are listed with the same access the container listing already has.
+
+Swarm **updates** are opt-in and off by default. Granting the proxy
+`SERVICES=1` exposes `/services`, which returns full service definitions —
+environment variables (including inline secrets), secret and config *names*,
+registry credentials configuration, and the mounts each service uses. Anything
+that can reach the proxy can therefore read more of your deployment than
+container inspection alone reveals. Enable it only if you want the app to roll
+services, and keep the proxy on an internal network either way.
+
+With the permission granted, the app still only ever calls `ServiceInspect`,
+`ServiceList` and `ServiceUpdate`, and only for a service it has already seen a
+task for. It never calls `SwarmInit`, `SwarmJoin`, `NodeUpdate`,
+`ServiceRemove` or the secrets and configs APIs. A rollout that does not settle
+is rolled back server-side to the previous spec.
+
+Task containers are never recreated directly, by the same reasoning as Quadlet:
+the orchestrator owns them, and a container we created would collide with
+swarm's own replacement.
 
 ### Podman / Quadlet containers
 

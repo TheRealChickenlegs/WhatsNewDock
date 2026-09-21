@@ -196,9 +196,84 @@ func TestMigrationUpgradesLegacyDatabase(t *testing.T) {
 	if c.Update == nil || c.Update.LatestTag != "1.28" {
 		t.Errorf("update data lost: %+v", c.Update)
 	}
-	// Migrated containers are not systemd-managed.
+	// Migrated containers are not systemd-managed, and not part of a swarm.
 	if c.Managed || c.SystemdUnit != "" {
 		t.Errorf("migrated container should not be managed: %q %v", c.SystemdUnit, c.Managed)
+	}
+	if c.SwarmTaskID != "" || c.SwarmServiceID != "" || c.SwarmServiceName != "" {
+		t.Errorf("migrated container should not be a swarm task: %+v", c)
+	}
+	// Migrated servers are not part of a swarm either, which is what keeps the
+	// swarm code path dormant on an existing deployment.
+	for _, srv := range servers {
+		if srv.SwarmRole != SwarmNone {
+			t.Errorf("migrated server %s has swarm role %q", srv.Name, srv.SwarmRole)
+		}
+		if srv.SwarmServices {
+			t.Errorf("migrated server %s reports the services API as available", srv.Name)
+		}
+	}
+}
+
+// TestSwarmFieldsRoundTrip checks the swarm membership survives storage, and
+// that a plain container is never mistaken for a swarm task.
+func TestSwarmFieldsRoundTrip(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "swarm.db"))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+
+	srv := &Server{ID: "sw1", Name: "manager", IsLocal: true, Status: "online",
+		SwarmRole: SwarmManager, SwarmServices: true}
+	if err := st.CreateServer(srv); err != nil {
+		t.Fatalf("create server: %v", err)
+	}
+	containers := []*Container{
+		{DockerID: "c1", Name: "web.1", Image: "nginx:1.25", ImageName: "docker.io/library/nginx",
+			ImageTag: "1.25", Registry: "docker.io", Repository: "library/nginx", State: "running",
+			Running: true, Managed: true,
+			SwarmServiceID: "svc1", SwarmServiceName: "web", SwarmTaskID: "task1", SwarmNodeID: "node1"},
+		{DockerID: "c2", Name: "plain", Image: "nginx:1.25", ImageName: "docker.io/library/nginx",
+			ImageTag: "1.25", Registry: "docker.io", Repository: "library/nginx", State: "running", Running: true},
+	}
+	if err := st.ReplaceServerSnapshot(srv, nil, containers); err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+
+	got, err := st.GetServer("sw1")
+	if err != nil {
+		t.Fatalf("get server: %v", err)
+	}
+	if got.SwarmRole != SwarmManager || !got.SwarmServices {
+		t.Errorf("server swarm state not persisted: %+v", got)
+	}
+
+	all, err := st.ListContainers(ContainerFilter{})
+	if err != nil {
+		t.Fatalf("list containers: %v", err)
+	}
+	byName := map[string]Container{}
+	for _, c := range all {
+		byName[c.Name] = c.Container
+	}
+	task := byName["web.1"]
+	if task.SwarmServiceID != "svc1" || task.SwarmServiceName != "web" || task.SwarmTaskID != "task1" || task.SwarmNodeID != "node1" {
+		t.Errorf("swarm identity lost: %+v", task)
+	}
+	plain := byName["plain"]
+	if plain.SwarmTaskID != "" || plain.SwarmServiceID != "" {
+		t.Errorf("a plain container gained swarm identity: %+v", plain)
+	}
+	// The services capability must survive a re-report that says otherwise on a
+	// host that is not a manager — it is only ever set by the probe.
+	if err := st.ReplaceServerSnapshot(&Server{ID: "sw1", Name: "manager", IsLocal: true,
+		Status: "online", SwarmRole: SwarmManager, SwarmServices: false}, nil, containers); err != nil {
+		t.Fatalf("re-report: %v", err)
+	}
+	after, _ := st.GetServer("sw1")
+	if after.SwarmServices {
+		t.Error("SwarmServices should follow the latest report")
 	}
 }
 
@@ -225,7 +300,7 @@ func TestMigrationIsIdempotent(t *testing.T) {
 			versions[v]++
 		}
 		rows.Close()
-		for _, want := range []int{1, 2, 3} {
+		for _, want := range []int{1, 2, 3, 4} {
 			if versions[want] != 1 {
 				t.Errorf("open #%d: migration %d recorded %d times, want 1", i, want, versions[want])
 			}

@@ -11,6 +11,7 @@ import {
   Pencil,
   Radio,
   Network,
+  Boxes,
 } from 'lucide-react'
 import { useFetch } from '@/lib/hooks'
 import { api } from '@/lib/api'
@@ -32,6 +33,33 @@ import DirectEndpointForm, { type EndpointValues } from '@/components/DirectEndp
 import { formatBytes, timeAgo } from '@/lib/utils'
 
 type AddMode = 'agent' | 'direct'
+
+/** Swarm role, and — for a manager — whether service updates are opted in. */
+function SwarmBadge({ server }: { server: Server }) {
+  const role = server.swarm_role
+  if (!role || role === 'none') return null
+  if (role === 'manager') {
+    return (
+      <Badge
+        variant="primary"
+        title={
+          server.swarm_services
+            ? 'Swarm manager — service updates are enabled'
+            : 'Swarm manager — service updates are opt-in: set SERVICES=1 (with POST=1) on your socket proxy'
+        }
+      >
+        <Boxes className="mr-1 h-3 w-3" />
+        swarm manager{server.swarm_services ? '' : ' · updates off'}
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="default" title="Swarm worker — tasks are visible, but updates need a manager node">
+      <Boxes className="mr-1 h-3 w-3" />
+      swarm worker
+    </Badge>
+  )
+}
 
 function ServerKindBadge({ server }: { server: Server }) {
   const kind = server.is_local ? 'local' : server.kind || 'agent'
@@ -157,12 +185,12 @@ export default function Servers() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {(servers || []).map((s) => (
             <Card key={s.id} className="p-5">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                     <ServerIcon className="h-5 w-5" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     {isAdmin ? (
                       <ServerNameEdit
                         id={s.id}
@@ -171,7 +199,7 @@ export default function Servers() {
                         renderName={(n) => (
                           <Link
                             to={`/servers/${s.id}`}
-                            className="inline-flex min-h-[28px] items-center text-sm font-semibold text-foreground hover:text-primary"
+                            className="inline-flex min-h-[28px] max-w-full items-center truncate text-sm font-semibold text-foreground hover:text-primary"
                           >
                             {n}
                           </Link>
@@ -180,21 +208,22 @@ export default function Servers() {
                     ) : (
                       <Link
                         to={`/servers/${s.id}`}
-                        className="inline-flex min-h-[28px] items-center text-sm font-semibold text-foreground hover:text-primary"
+                        className="inline-flex min-h-[28px] max-w-full items-center truncate text-sm font-semibold text-foreground hover:text-primary"
                       >
                         {s.name}
                       </Link>
                     )}
-                    <div className="mt-0.5 flex items-center gap-2">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                       <Badge variant={s.online ? 'success' : 'muted'}>
                         {s.online ? 'online' : 'offline'}
                       </Badge>
                       <ServerKindBadge server={s} />
+                      <SwarmBadge server={s} />
                     </div>
                   </div>
                 </div>
                 {isAdmin && !s.is_local && (
-                  <div className="flex items-center">
+                  <div className="flex shrink-0 items-center">
                     {s.kind === 'direct' && (
                       <Button
                         size="icon"

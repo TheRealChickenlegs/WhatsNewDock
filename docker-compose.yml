@@ -51,6 +51,14 @@ services:
       NODES: "0"
       PLUGINS: "0"
       SECRETS: "0"
+      # --- Docker Swarm, opt-in -------------------------------------------
+      # Monitoring a swarm needs nothing here: task containers are listed with
+      # the containers API, and stacks/services are derived from their labels.
+      # Rolling a service onto a new image does need the services API, so set
+      # this to "1" if you want the update button to work on a swarm manager.
+      # Note that /services returns full service definitions (environment
+      # variables, secret names, registry config) to anything that can reach
+      # this proxy, which is why it stays off by default.
       SERVICES: "0"
       SESSION: "0"
       SWARM: "0"

@@ -49,18 +49,19 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-const serverColumns = `id, name, is_local, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, kind, docker_host, tls_ca, tls_cert, tls_key, name_custom, created_at, updated_at`
+const serverColumns = `id, name, is_local, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, kind, docker_host, tls_ca, tls_cert, tls_key, name_custom, swarm_role, swarm_services, created_at, updated_at`
 const serverSelect = `SELECT ` + serverColumns + ` FROM servers`
 
 // scanServer scans a single server row into a Server.
 func scanServer(sc scanner) (*Server, error) {
 	var v Server
 	var lastSeen, dockerVer, osName, archName, labelsRaw sql.NullString
-	var kind, dockerHost, tlsCA, tlsCert, tlsKey sql.NullString
+	var kind, dockerHost, tlsCA, tlsCert, tlsKey, swarmRole sql.NullString
 	var createdStr, updatedStr string
 	if err := sc.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
 		&osName, &archName, &v.CPUs, &v.MemoryBytes, &labelsRaw,
 		&kind, &dockerHost, &tlsCA, &tlsCert, &tlsKey, &v.NameCustom,
+		&swarmRole, &v.SwarmServices,
 		&createdStr, &updatedStr); err != nil {
 		return nil, err
 	}
@@ -71,6 +72,10 @@ func scanServer(sc scanner) (*Server, error) {
 	v.OS = osName.String
 	v.Arch = archName.String
 	v.Labels = unmarshalList(labelsRaw.String)
+	v.SwarmRole = SwarmRole(swarmRole.String)
+	if v.SwarmRole == "" {
+		v.SwarmRole = SwarmNone
+	}
 	v.DockerHost = dockerHost.String
 	v.TLSCA = tlsCA.String
 	v.TLSCert = tlsCert.String
@@ -155,7 +160,7 @@ func (s *Store) ListContainers(f ContainerFilter) ([]ContainerWithUpdate, error)
 	SELECT c.id, c.server_id, c.stack_id, c.docker_id, c.name, c.image, c.image_name, c.image_tag,
 		c.image_digest, c.registry, c.repository, c.state, c.status, c.running, c.restart_policy,
 		c.compose_service, c.created_at, c.started_at, c.labels, c.ports, c.pinned,
-		c.systemd_unit, c.managed, c.updated_at,
+		c.systemd_unit, c.managed, c.swarm_service_id, c.swarm_service_name, c.swarm_task_id, c.swarm_node_id, c.updated_at,
 		srv.name AS server_name, st.name AS stack_name,
 		u.id, u.repo_key, u.current_tag, u.latest_tag, u.versions_behind, u.source, u.source_url, u.checked_at
 	FROM containers c
@@ -175,7 +180,7 @@ func (s *Store) GetContainer(id string) (*ContainerWithUpdate, error) {
 	SELECT c.id, c.server_id, c.stack_id, c.docker_id, c.name, c.image, c.image_name, c.image_tag,
 		c.image_digest, c.registry, c.repository, c.state, c.status, c.running, c.restart_policy,
 		c.compose_service, c.created_at, c.started_at, c.labels, c.ports, c.pinned,
-		c.systemd_unit, c.managed, c.updated_at,
+		c.systemd_unit, c.managed, c.swarm_service_id, c.swarm_service_name, c.swarm_task_id, c.swarm_node_id, c.updated_at,
 		srv.name AS server_name, st.name AS stack_name,
 		u.id, u.repo_key, u.current_tag, u.latest_tag, u.versions_behind, u.source, u.source_url, u.checked_at
 	FROM containers c
@@ -249,7 +254,7 @@ func (s *Store) scanContainers(q string, args ...any) ([]ContainerWithUpdate, er
 	for rows.Next() {
 		var c ContainerWithUpdate
 		var stackID, imageDigest, status, restartPolicy, composeService, createdRaw, startedRaw, stackName sql.NullString
-		var systemdUnit sql.NullString
+		var systemdUnit, swarmServiceID, swarmServiceName, swarmTaskID, swarmNodeID sql.NullString
 		var uID, uRepoKey, uCur, uLatest, uSource, uSourceURL, uChecked sql.NullString
 		var uBehind sql.NullInt64
 		var labelsRaw, portsRaw string
@@ -259,7 +264,7 @@ func (s *Store) scanContainers(q string, args ...any) ([]ContainerWithUpdate, er
 			&c.ID, &c.ServerID, &stackID, &c.DockerID, &c.Name, &c.Image, &c.ImageName, &c.ImageTag,
 			&imageDigest, &c.Registry, &c.Repository, &c.State, &status, &c.Running, &restartPolicy,
 			&composeService, &createdRaw, &startedRaw, &labelsRaw, &portsRaw, &c.Pinned,
-			&systemdUnit, &c.Managed, &updatedRaw,
+			&systemdUnit, &c.Managed, &swarmServiceID, &swarmServiceName, &swarmTaskID, &swarmNodeID, &updatedRaw,
 			&c.ServerName, &stackName,
 			&uID, &uRepoKey, &uCur, &uLatest, &uBehind, &uSource, &uSourceURL, &uChecked,
 		); err != nil {
@@ -272,6 +277,10 @@ func (s *Store) scanContainers(q string, args ...any) ([]ContainerWithUpdate, er
 		c.RestartPolicy = restartPolicy.String
 		c.ComposeService = composeService.String
 		c.SystemdUnit = systemdUnit.String
+		c.SwarmServiceID = swarmServiceID.String
+		c.SwarmServiceName = swarmServiceName.String
+		c.SwarmTaskID = swarmTaskID.String
+		c.SwarmNodeID = swarmNodeID.String
 		c.UpdatedAt = parseTS(updatedRaw)
 		if createdRaw.Valid {
 			c.CreatedAt = parseTS(createdRaw.String)
@@ -525,16 +534,18 @@ func (s *Store) ReplaceServerSnapshot(srv *Server, stacks []*Stack, containers [
 	// vice versa). A name an operator chose by hand likewise wins over the
 	// hostname reported by the daemon.
 	if _, err := tx.Exec(`
-		INSERT INTO servers(id, name, is_local, kind, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, name_custom, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO servers(id, name, is_local, kind, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, name_custom, swarm_role, swarm_services, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = CASE WHEN servers.name_custom = 1 THEN servers.name ELSE excluded.name END,
 			status = excluded.status, last_seen = excluded.last_seen,
 			docker_version = excluded.docker_version, os = excluded.os, arch = excluded.arch,
 			cpus = excluded.cpus, memory_bytes = excluded.memory_bytes, labels = excluded.labels,
+			swarm_role = excluded.swarm_role, swarm_services = excluded.swarm_services,
 			updated_at = excluded.updated_at`,
 		srv.ID, srv.Name, boolInt(srv.IsLocal), string(srv.Kind), srv.Status, ts(srv.LastSeen), srv.DockerVersion,
 		srv.OS, srv.Arch, srv.CPUs, srv.MemoryBytes, marshalList(srv.Labels), boolInt(srv.NameCustom),
+		swarmRoleOrNone(srv.SwarmRole), boolInt(srv.SwarmServices),
 		ts(srv.CreatedAt), ts(srv.UpdatedAt),
 	); err != nil {
 		return err
@@ -632,8 +643,9 @@ func (s *Store) ReplaceServerSnapshot(srv *Server, stacks []*Stack, containers [
 		if _, err := tx.Exec(`
 			INSERT INTO containers(id, server_id, stack_id, docker_id, name, image, image_name, image_tag,
 				image_digest, registry, repository, state, status, running, restart_policy, compose_service,
-				created_at, started_at, labels, ports, pinned, systemd_unit, managed, updated_at)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				created_at, started_at, labels, ports, pinned, systemd_unit, managed,
+				swarm_service_id, swarm_service_name, swarm_task_id, swarm_node_id, updated_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
 				stack_id = excluded.stack_id, name = excluded.name, image = excluded.image,
 				image_name = excluded.image_name, image_tag = excluded.image_tag, image_digest = excluded.image_digest,
@@ -642,11 +654,15 @@ func (s *Store) ReplaceServerSnapshot(srv *Server, stacks []*Stack, containers [
 				compose_service = excluded.compose_service, created_at = excluded.created_at,
 				started_at = excluded.started_at, labels = excluded.labels, ports = excluded.ports,
 				systemd_unit = excluded.systemd_unit, managed = excluded.managed,
+				swarm_service_id = excluded.swarm_service_id, swarm_service_name = excluded.swarm_service_name,
+				swarm_task_id = excluded.swarm_task_id, swarm_node_id = excluded.swarm_node_id,
 				updated_at = excluded.updated_at`,
 			c.ID, srv.ID, nullable(c.StackID), c.DockerID, c.Name, c.Image, c.ImageName, c.ImageTag,
 			nullable(c.ImageDigest), c.Registry, c.Repository, c.State, nullable(c.Status), boolInt(c.Running),
 			nullable(c.RestartPolicy), nullable(c.ComposeService), nullableTime(c.CreatedAt), nullableTime(c.StartedAt),
-			marshalMap(c.Labels), marshalList(c.Ports), boolInt(c.Pinned), nullable(c.SystemdUnit), boolInt(c.Managed), ts(c.UpdatedAt),
+			marshalMap(c.Labels), marshalList(c.Ports), boolInt(c.Pinned), nullable(c.SystemdUnit), boolInt(c.Managed),
+			nullable(c.SwarmServiceID), nullable(c.SwarmServiceName), nullable(c.SwarmTaskID), nullable(c.SwarmNodeID),
+			ts(c.UpdatedAt),
 		); err != nil {
 			return err
 		}
@@ -680,6 +696,14 @@ func nullable(v string) any {
 		return nil
 	}
 	return v
+}
+
+// swarmRoleOrNone normalises an unset role so the column never holds "".
+func swarmRoleOrNone(role SwarmRole) string {
+	if role == "" {
+		return string(SwarmNone)
+	}
+	return string(role)
 }
 
 func nullableTime(t time.Time) any {

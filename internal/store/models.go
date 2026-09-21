@@ -15,6 +15,18 @@ const (
 	ServerDirect ServerKind = "direct"
 )
 
+// SwarmRole describes a host's position in a swarm.
+type SwarmRole string
+
+const (
+	// SwarmNone is a host that is not part of a swarm (the common case).
+	SwarmNone SwarmRole = "none"
+	// SwarmWorker runs tasks but cannot manage services.
+	SwarmWorker SwarmRole = "worker"
+	// SwarmManager can list and update services.
+	SwarmManager SwarmRole = "manager"
+)
+
 // Server represents a monitored Docker host (local, agent or direct endpoint).
 type Server struct {
 	ID            string     `json:"id"`
@@ -29,6 +41,11 @@ type Server struct {
 	CPUs          int        `json:"cpus"`
 	MemoryBytes   int64      `json:"memory_bytes"`
 	Labels        []string   `json:"labels"`
+	// SwarmRole is the host's swarm position; SwarmServices records whether the
+	// services API is usable, which is false until an operator opts in by
+	// granting SERVICES to the socket proxy.
+	SwarmRole     SwarmRole `json:"swarm_role,omitempty"`
+	SwarmServices bool      `json:"swarm_services,omitempty"`
 	// DockerHost is the Engine API endpoint for direct servers.
 	DockerHost string `json:"docker_host,omitempty"`
 	// TLS material is referenced by file path and never exposed over the API.
@@ -93,9 +110,16 @@ type Container struct {
 	Pinned         bool              `json:"pinned"` // do not offer updates
 	// SystemdUnit is set when the container is managed by systemd (Quadlet); it
 	// is unsafe to recreate such a container behind systemd's back.
-	SystemdUnit string    `json:"systemd_unit,omitempty"`
-	Managed     bool      `json:"managed"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	SystemdUnit string `json:"systemd_unit,omitempty"`
+	Managed     bool   `json:"managed"`
+	// Swarm membership, read from the labels swarm puts on every task
+	// container. A task is owned by its service, so it must never be recreated
+	// directly either.
+	SwarmServiceID   string    `json:"swarm_service_id,omitempty"`
+	SwarmServiceName string    `json:"swarm_service_name,omitempty"`
+	SwarmTaskID      string    `json:"swarm_task_id,omitempty"`
+	SwarmNodeID      string    `json:"swarm_node_id,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Update describes an available update for a container.

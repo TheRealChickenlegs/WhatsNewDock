@@ -160,6 +160,26 @@ Containers without that label are unaffected. If you prefer the unit to own its
 own updates entirely, keep `AutoUpdate=registry` and `podman-auto-update.timer`
 above — the app will still track and show what is available.
 
+## Docker Swarm
+
+A swarm host is monitored with no extra configuration — task containers carry
+the `com.docker.swarm.*` labels, so WhatsNewDock shows the stack → service →
+task hierarchy and the running task count.
+
+**Rolling a service onto a new image is opt-in**, because a task belongs to a
+service and must be updated through the orchestrator, not recreated. Grant the
+services API to the proxy and restart it:
+
+```bash
+# /etc/containers/systemd/whatsnewdock-socket-proxy.container
+Environment=SERVICES=1     # alongside the existing POST=1
+sudo systemctl daemon-reload && sudo systemctl restart whatsnewdock-socket-proxy
+```
+
+The host must be a swarm **manager**; a worker can be monitored but not updated.
+Be aware that `/services` exposes full service definitions to anything that can
+reach the proxy — see `docs/SECURITY.md` before enabling it.
+
 ## Multi-host
 
 Quadlet runs on the host it is installed on.

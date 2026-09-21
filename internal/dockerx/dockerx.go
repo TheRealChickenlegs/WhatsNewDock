@@ -24,6 +24,8 @@ import (
 // Client is a Docker Engine API client wrapper.
 type Client struct {
 	cli *client.Client
+	// swarmCap memoises the services-API capability probe (see swarm.go).
+	swarmCap swarmCapability
 }
 
 // New creates a Docker client from configuration.
@@ -71,6 +73,7 @@ func (c *Client) Info(ctx context.Context) (store.Server, error) {
 	s.CPUs = info.NCPU
 	s.MemoryBytes = info.MemTotal
 	s.Labels = info.Labels
+	s.SwarmRole = swarmRoleFrom(info.Swarm)
 	return s, nil
 }
 
@@ -93,6 +96,9 @@ func (c *Client) Snapshot(ctx context.Context) (*Snapshot, error) {
 	}
 
 	snap := &Snapshot{Server: info}
+	// Only a manager can use the services API, and only when the socket proxy
+	// has been granted it; the answer is cached, so this is not a per-poll cost.
+	snap.Server.SwarmServices = c.servicesAvailable(ctx, snap.Server.SwarmRole)
 	stackSet := map[string]store.StackKind{}
 
 	for _, ctr := range containers {
@@ -150,6 +156,17 @@ func (c *Client) Snapshot(ctx context.Context) (*Snapshot, error) {
 		// unaffected.
 		if unit := podmanSystemdUnit(ctr.Labels); unit != "" {
 			c.SystemdUnit = unit
+			c.Managed = true
+		}
+
+		// A swarm task is owned by its service, so it is managed too: recreating
+		// it directly would race the orchestrator and produce a container
+		// wearing another task's labels.
+		if sw := swarmTask(ctr.Labels); sw.TaskID != "" {
+			c.SwarmServiceID = sw.ServiceID
+			c.SwarmServiceName = sw.ServiceName
+			c.SwarmTaskID = sw.TaskID
+			c.SwarmNodeID = sw.NodeID
 			c.Managed = true
 		}
 

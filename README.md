@@ -161,6 +161,54 @@ sudo systemctl start whatsnewdock
 See [`deploy/quadlet/README.md`](deploy/quadlet/README.md) for secrets files,
 rootless setup, SELinux and volume-ownership notes, and auto-updates.
 
+### Docker Swarm (read-only by default)
+
+Swarm hosts are monitored out of the box. Task containers carry the
+`com.docker.swarm.*` labels, so WhatsNewDock groups them the way you think about
+them — **stack → service → task** — and shows how many tasks of each service are
+running, without needing any additional API permission.
+
+**Updating a service is opt-in.** A swarm task belongs to a service, so it is
+never recreated directly: the orchestrator owns it, and recreating one would race
+the scheduler and produce a container wearing another task's labels. Instead the
+update is handed to swarm, which rolls every replica. That needs the services
+API, which the bundled socket proxy denies by default:
+
+```yaml
+  socket-proxy:
+    environment:
+      SERVICES: "1"   # was "0" — enables rolling a service onto a new image
+      POST: "1"       # already required for updates
+```
+
+Restart the proxy (and WhatsNewDock) and a manager node's update button starts
+rolling services. The UI says so on the server page while it is still off. With
+`SERVICES=0` nothing changes: task containers are listed and never touched.
+
+What the update does:
+
+1. pulls the new image — a failed pull leaves the service alone;
+2. calls `ServiceUpdate` with the new image, re-querying the registry so a
+   floating tag picks up its new digest;
+3. when the image reference has not changed at all (a plain `:latest`), bumps
+   the force counter, because otherwise swarm sees an identical spec and rolls
+   nothing out;
+4. waits for the orchestrator to report the rollout **completed** with every
+   desired task running, and only then reports success. A rollout that never
+   settles is undone — server-side rollback to the previous spec — and reported
+   as a failure, so a crash-looping image is never mistaken for a good update.
+
+Requirements and limits:
+
+- The host must be a **manager**. A worker node can be monitored but not updated;
+  the UI says so rather than failing halfway.
+- Granting `SERVICES` widens what the proxy exposes — service definitions include
+  environment variables, secret *names* and registry configuration. That is why
+  it is off by default. See `docs/SECURITY.md`.
+- Agents must be at least this version. An older agent does not recognise swarm
+  labels and would fall back to recreating a task container, so update the agent
+  on any swarm host before using the feature.
+
 ### Updating Quadlet-managed containers
 
 Containers started from a Quadlet unit carry the `PODMAN_SYSTEMD_UNIT` label, so

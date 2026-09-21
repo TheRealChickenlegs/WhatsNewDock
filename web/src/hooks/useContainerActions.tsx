@@ -50,7 +50,11 @@ export function useContainerActions(refetch: () => void) {
   // nothing in the Docker API can start a unit again.
   const requestUpdate = useCallback(
     (c: Container) => {
-      if (c.managed && !c.running) {
+      // A swarm task is left to the server: whether the host is a manager and
+      // whether swarm updates are opted in is its call, and its message says
+      // exactly what to change. A Quadlet container, by contrast, is refused
+      // here because we know it cannot work while it is stopped.
+      if (c.managed && !c.swarm_task_id && !c.running) {
         notify(
           'error',
           `${c.name} is managed by ${c.systemd_unit || 'systemd'} and is not running — start it first (systemctl start ${c.systemd_unit || '<unit>'})`,
@@ -157,11 +161,15 @@ export function useContainerActions(refetch: () => void) {
           <span className="font-mono text-foreground">{confirm?.update?.latest_tag}</span>?
           <br />
           <span className="text-xs">
-            {confirm?.managed
-              ? `The image will be pulled and the systemd unit (${
-                  confirm.systemd_unit || 'systemd'
-                }) will recreate the container on it.`
-              : 'The image will be pulled and the container recreated with its current configuration.'}
+            {confirm?.swarm_service_id
+              ? `The image will be pulled and swarm will roll out every replica of ${
+                  confirm.swarm_service_name || 'the service'
+                }.`
+              : confirm?.managed
+                ? `The image will be pulled and the systemd unit (${
+                    confirm.systemd_unit || 'systemd'
+                  }) will recreate the container on it.`
+                : 'The image will be pulled and the container recreated with its current configuration.'}
           </span>
         </>
       }

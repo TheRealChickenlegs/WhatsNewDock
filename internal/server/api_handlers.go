@@ -45,12 +45,36 @@ func (s *Server) executorFor(srv *store.Server) (*dockerx.Client, error) {
 // updateBlockedReason explains why a container cannot be updated at all, or
 // returns "" when the update may proceed.
 //
-// A systemd-managed (Podman Quadlet) container is updated by handing the
-// recreate to its systemd unit, which only works while the container is
-// running: the unit's teardown removes a stopped container, and nothing in the
-// Docker Engine API can start a unit again. Refusing here turns a 90-second
-// timeout into an immediate, actionable message.
-func updateBlockedReason(c *store.ContainerWithUpdate) string {
+// Two kinds of container are owned by something else and are handled rather
+// than recreated:
+//
+//   - a swarm task belongs to a service, which the orchestrator rolls for us;
+//   - a systemd-managed (Podman Quadlet) container is updated by its unit,
+//     which only works while it is running because the unit's teardown removes
+//     a stopped container and nothing in the Engine API can start a unit again.
+//
+// Refusing here turns a long timeout into an immediate, actionable message.
+func updateBlockedReason(c *store.ContainerWithUpdate, srv *store.Server) string {
+	// Swarm tasks: only a manager can act, and only when the operator has
+	// granted the services API to the socket proxy.
+	if c.SwarmTaskID != "" {
+		role := store.SwarmNone
+		if srv != nil && srv.SwarmRole != "" {
+			role = srv.SwarmRole
+		}
+		switch {
+		case role == store.SwarmNone:
+			// The host stopped reporting as a swarm member; fall through to the
+			// generic message rather than guessing.
+			return "cannot update " + c.Name + ": it is a swarm task, but the host is not currently reporting as a swarm manager."
+		case role != store.SwarmManager:
+			return "cannot update " + swarmName(c) + ": this is a swarm worker node. Add a manager node and update the service there."
+		case !srv.SwarmServices:
+			return "cannot update " + swarmName(c) + ": swarm service updates are opt-in. Grant the services API to your socket proxy (set SERVICES=1 alongside POST=1) and restart it, then try again."
+		}
+		return ""
+	}
+
 	if !c.Managed || c.Running {
 		return ""
 	}
@@ -61,6 +85,15 @@ func updateBlockedReason(c *store.ContainerWithUpdate) string {
 	return "cannot update " + c.Name + ": it is managed by the systemd unit " + c.SystemdUnit +
 		" and is not running. Start it first (`systemctl start " + c.SystemdUnit +
 		"`) so it comes up on the newly pulled image."
+}
+
+// swarmName describes a swarm task by its service, which is what the operator
+// recognises (replica names like web.3 are generated).
+func swarmName(c *store.ContainerWithUpdate) string {
+	if c.SwarmServiceName != "" {
+		return "service " + c.SwarmServiceName
+	}
+	return c.Name
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +176,8 @@ func serverJSON(srv store.Server) map[string]any {
 		"cpus":           srv.CPUs,
 		"memory_bytes":   srv.MemoryBytes,
 		"labels":         srv.Labels,
+		"swarm_role":     string(srv.SwarmRole),
+		"swarm_services": srv.SwarmServices,
 	}
 	// Only direct endpoints expose connection details; TLS material is never
 	// returned (it is referenced by file path on the host).
@@ -517,9 +552,10 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 		actor = u.Username
 	}
 
-	// A systemd-managed (Podman Quadlet) container is updated by handing the
-	// recreate to its unit, which cannot be done while it is stopped.
-	if reason := updateBlockedReason(c); reason != "" {
+	// Containers owned by something else — a swarm service or a systemd unit —
+	// are handled through their owner, and refuse up front when that is not
+	// possible.
+	if reason := updateBlockedReason(c, srv); reason != "" {
 		writeError(w, http.StatusConflict, reason)
 		return
 	}
@@ -540,10 +576,14 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 			ctx := context.Background()
 			err := exec.RecreateContainer(ctx, c.DockerID, target, func(stage string, percent int) {
 				job := &updateJob{ContainerID: c.ID, Name: c.Name, Progress: percent}
-				if stage == "pulling" {
+				switch stage {
+				case "pulling":
 					job.Status = jobPulling
 					job.Message = "Pulling image…"
-				} else {
+				case "updating":
+					job.Status = jobUpdating
+					job.Message = "Rolling out the service…"
+				default:
 					job.Status = jobRecreating
 					job.Message = "Recreating container…"
 				}
@@ -558,7 +598,12 @@ func (s *Server) handleRequestUpdate(w http.ResponseWriter, r *http.Request) {
 			_ = s.st.AddEvent(s.eventNow("update_done", actor, c.ServerID, c.ID, c.Name+" updated to "+target))
 		}()
 		_ = s.st.AddEvent(s.eventNow("update_requested", actor, c.ServerID, c.ID, c.Name+" -> "+target))
-		writeJSON(w, http.StatusOK, map[string]any{"queued": true, "local": srv.IsLocal, "direct": srv.Kind == store.ServerDirect})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"queued": true,
+			"local":  srv.IsLocal,
+			"direct": srv.Kind == store.ServerDirect,
+			"swarm":  c.SwarmTaskID != "",
+		})
 		return
 	}
 

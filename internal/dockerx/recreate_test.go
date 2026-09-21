@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/swarm"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -44,10 +45,134 @@ type fakeDaemon struct {
 	failStartAt  string // container id whose start fails
 	pullErr      error
 	onStop       func(d *fakeDaemon) // simulates the systemd unit reacting to a stop
+
+	// Swarm service state.
+	services         map[string]*fakeService
+	failServiceAPI   error // e.g. a socket proxy refusing /services
+	failServiceUpd   error
+	serviceUpdCalls  []swarm.ServiceUpdateOptions
+	serviceListCalls int
+}
+
+// fakeService is enough of a swarm service to drive the rollout state machine.
+type fakeService struct {
+	id      string
+	name    string
+	image   string
+	spec    swarm.ServiceSpec
+	version uint64
+	running uint64
+	desired uint64
+	// updateState is what the next inspection reports. Tests move it to model
+	// a rollout completing, crash-looping or being rolled back.
+	updateState string
+	// convergeAfter is how many inspections report "updating" before the
+	// service settles, so a test can model a rollout that takes a moment.
+	convergeAfter int
+	inspections   int
+	// rollbackOnUpdate models swarm deciding for itself that the new version
+	// is bad and undoing it.
+	rollbackOnUpdate bool
+}
+
+func (s *fakeService) service() swarm.Service {
+	spec := s.spec
+	if spec.TaskTemplate.ContainerSpec == nil {
+		spec.TaskTemplate.ContainerSpec = &swarm.ContainerSpec{}
+	}
+	spec.TaskTemplate.ContainerSpec.Image = s.image
+	svc := swarm.Service{
+		ID:   s.id,
+		Meta: swarm.Meta{Version: swarm.Version{Index: s.version}},
+		Spec: spec,
+	}
+	svc.Spec.Annotations.Name = s.name
+	svc.ServiceStatus = &swarm.ServiceStatus{RunningTasks: s.running, DesiredTasks: s.desired}
+	if s.updateState != "" {
+		svc.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateState(s.updateState)}
+	}
+	return svc
 }
 
 func newFakeDaemon(c *fakeContainer) *fakeDaemon {
-	return &fakeDaemon{containers: map[string]*fakeContainer{c.id: c}}
+	return &fakeDaemon{containers: map[string]*fakeContainer{c.id: c}, services: map[string]*fakeService{}}
+}
+
+// addService registers a swarm service the fake daemon will answer for.
+func (d *fakeDaemon) addService(s *fakeService) *fakeService {
+	d.services[s.id] = s
+	return s
+}
+
+func (d *fakeDaemon) ServiceInspectWithRaw(_ context.Context, serviceID string, _ swarm.ServiceInspectOptions) (swarm.Service, []byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failServiceAPI != nil {
+		return swarm.Service{}, nil, d.failServiceAPI
+	}
+	svc, ok := d.services[serviceID]
+	if !ok {
+		return swarm.Service{}, nil, errors.New("no such service: " + serviceID)
+	}
+	return svc.service(), nil, nil
+}
+
+func (d *fakeDaemon) ServiceUpdate(_ context.Context, serviceID string, version swarm.Version, spec swarm.ServiceSpec, options swarm.ServiceUpdateOptions) (swarm.ServiceUpdateResponse, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failServiceAPI != nil {
+		return swarm.ServiceUpdateResponse{}, d.failServiceAPI
+	}
+	if d.failServiceUpd != nil {
+		return swarm.ServiceUpdateResponse{}, d.failServiceUpd
+	}
+	svc, ok := d.services[serviceID]
+	if !ok {
+		return swarm.ServiceUpdateResponse{}, errors.New("no such service: " + serviceID)
+	}
+	d.serviceUpdCalls = append(d.serviceUpdCalls, options)
+	if options.Rollback == "previous" {
+		d.record("service-rollback:%s", svc.name)
+		svc.updateState = string(swarm.UpdateStateRollbackCompleted)
+		svc.running = svc.desired
+		return swarm.ServiceUpdateResponse{}, nil
+	}
+	d.record("service-update:%s->%s", svc.name, spec.TaskTemplate.ContainerSpec.Image)
+	svc.spec = spec
+	svc.image = spec.TaskTemplate.ContainerSpec.Image
+	svc.version = version.Index + 1
+	svc.running = 0
+	svc.inspections = 0
+	svc.updateState = string(swarm.UpdateStateUpdating)
+	if svc.rollbackOnUpdate {
+		svc.updateState = string(swarm.UpdateStateRollbackCompleted)
+		svc.running = svc.desired
+	}
+	return swarm.ServiceUpdateResponse{}, nil
+}
+
+func (d *fakeDaemon) ServiceList(_ context.Context, _ swarm.ServiceListOptions) ([]swarm.Service, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.serviceListCalls++
+	if d.failServiceAPI != nil {
+		return nil, d.failServiceAPI
+	}
+	out := make([]swarm.Service, 0, len(d.services))
+	for _, s := range d.services {
+		// Advance the modelled rollout the way the daemon does: a rolling
+		// update keeps the old task running, so only the state says when it is
+		// finished.
+		if s.updateState == string(swarm.UpdateStateUpdating) {
+			if s.inspections >= s.convergeAfter {
+				s.updateState = string(swarm.UpdateStateCompleted)
+				s.running = s.desired
+			}
+			s.inspections++
+		}
+		out = append(out, s.service())
+	}
+	return out, nil
 }
 
 func (d *fakeDaemon) record(format string, args ...any) {

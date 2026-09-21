@@ -1,5 +1,5 @@
 import { useState, type MouseEvent } from 'react'
-import { RefreshCw, Pin, PinOff } from 'lucide-react'
+import { RefreshCw, Pin, PinOff, Boxes } from 'lucide-react'
 import type { Container } from '@/lib/types'
 import { Badge, Button } from '@/components/ui'
 import { cx, registryLabel, timeAgo } from '@/lib/utils'
@@ -10,6 +10,22 @@ interface Props {
   onSelect: (c: Container) => void
   onUpdate: (c: Container) => void
   onPin: (c: Container, pinned: boolean) => void
+}
+
+/** The badge shown when something other than us owns this container. */
+function ManagedBadge({ c }: { c: Container }) {
+  if (c.swarm_service_id) {
+    return (
+      <Badge variant="primary" title={`Swarm service ${c.swarm_service_name || c.swarm_service_id}`}>
+        <Boxes className="mr-1 h-3 w-3" />
+        {c.swarm_service_name || 'swarm'}
+      </Badge>
+    )
+  }
+  if (c.managed) {
+    return <Badge variant="warning">{c.systemd_unit || 'systemd'}</Badge>
+  }
+  return null
 }
 
 /** The "current → latest" summary, shared by the card and table layouts. */
@@ -30,11 +46,6 @@ function UpdateSummary({ c }: { c: Container }) {
         {c.update.versions_behind > 1 && `${c.update.versions_behind} versions behind · `}
         {timeAgo(c.update.checked_at)}
       </span>
-      {c.managed && (
-        <span className="text-[11px] text-muted-foreground">
-          systemd: {c.systemd_unit || 'managed'}
-        </span>
-      )}
     </div>
   )
 }
@@ -58,9 +69,11 @@ function UpdateButton({
       loading={busy}
       onClick={() => onUpdate(c)}
       title={
-        c.managed
-          ? `Update to ${c.update.latest_tag} — the systemd unit will recreate this container`
-          : `Update to ${c.update.latest_tag}`
+        c.swarm_service_id
+          ? `Update to ${c.update.latest_tag} — rolls out every replica of ${c.swarm_service_name || 'the service'}`
+          : c.managed
+            ? `Update to ${c.update.latest_tag} — the systemd unit will recreate this container`
+            : `Update to ${c.update.latest_tag}`
       }
     >
       <RefreshCw className="h-3.5 w-3.5" />
@@ -133,7 +146,10 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                   {c.image_name}:{c.image_tag || 'latest'}
                 </div>
               </div>
-              <Badge variant="muted">{registryLabel(c.registry)}</Badge>
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <Badge variant="muted">{registryLabel(c.registry)}</Badge>
+                <ManagedBadge c={c} />
+              </div>
             </div>
 
             <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
@@ -200,8 +216,9 @@ export default function ContainerTable({ containers, isAdmin, onSelect, onUpdate
                   <td className="px-4 py-3">
                     <div className="max-w-[240px]">
                       <div className="truncate font-mono text-xs text-foreground">{c.image_name}</div>
-                      <div className="mt-0.5">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1">
                         <Badge variant="muted">{registryLabel(c.registry)}</Badge>
+                        <ManagedBadge c={c} />
                       </div>
                     </div>
                   </td>

@@ -44,6 +44,16 @@ export default function ServerDetail() {
             )}
             {server?.online ? <Badge variant="success">online</Badge> : <Badge variant="muted">offline</Badge>}
             {server?.is_local && <Badge variant="primary">local</Badge>}
+            {server?.swarm_role === 'manager' && (
+              <Badge variant="primary" title="Swarm manager">
+                swarm manager
+              </Badge>
+            )}
+            {server?.swarm_role === 'worker' && (
+              <Badge variant="default" title="Swarm worker: tasks are visible, updates need a manager">
+                swarm worker
+              </Badge>
+            )}
           </div>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Docker {server?.docker_version || '—'} · {server?.os || '—'} / {server?.arch || '—'} · last
@@ -59,6 +69,18 @@ export default function ServerDetail() {
           </span>
         </div>
       </div>
+
+      {server?.swarm_role === 'manager' && !server?.swarm_services && (
+        <Card className="border-primary/30 bg-primary/5 p-4">
+          <p className="text-xs leading-relaxed text-foreground">
+            This host is a swarm manager, so its tasks and services are monitored — but updating a
+            service is <strong>opt-in</strong>. Grant the services API to your socket proxy (set{' '}
+            <span className="font-mono">SERVICES=1</span> alongside{' '}
+            <span className="font-mono">POST=1</span>) and restart it, and the update button starts
+            rolling out services.
+          </p>
+        </Card>
+      )}
 
       {(stacks || []).length > 0 && (
         <div>

@@ -45,7 +45,16 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
               <InfoRow label="Registry" value={registryLabel(c.registry)} />
               <InfoRow label="Status" value={c.status} />
               <InfoRow label="Restart policy" value={c.restart_policy || '—'} />
-              {c.managed && (
+              {c.swarm_service_id && (
+                <>
+                  <InfoRow label="Swarm service" value={c.swarm_service_name || c.swarm_service_id} />
+                  {c.swarm_node_id && (
+                    <InfoRow label="Node" value={shortId(c.swarm_node_id)} />
+                  )}
+                  {c.swarm_task_id && <InfoRow label="Task" value={shortId(c.swarm_task_id)} />}
+                </>
+              )}
+              {c.managed && !c.swarm_service_id && (
                 <div>
                   <div className="text-xs font-medium text-muted-foreground">Managed by</div>
                   <div className="mt-1">
@@ -84,7 +93,17 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
                 ) : (
                   <p className="text-xs text-muted-foreground">No update available.</p>
                 )}
-                {c.managed && (
+                {c.swarm_service_id && (
+                  <p className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+                    This is a task of the swarm service{' '}
+                    <span className="font-mono">{c.swarm_service_name || c.swarm_service_id}</span>.
+                    Updating rolls out <strong>every replica</strong> through the orchestrator — we
+                    never recreate a task behind swarm's back. Swarm updates are opt-in: your socket
+                    proxy needs <span className="font-mono">SERVICES=1</span> (with{' '}
+                    <span className="font-mono">POST=1</span>), and the host must be a manager.
+                  </p>
+                )}
+                {c.managed && !c.swarm_service_id && (
                   <p className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground">
                     This container belongs to{' '}
                     <span className="font-mono">{c.systemd_unit || 'a systemd unit'}</span>. The

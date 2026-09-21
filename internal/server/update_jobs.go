@@ -12,8 +12,11 @@ const (
 	jobQueued     updateJobStatus = "queued"
 	jobPulling    updateJobStatus = "pulling"
 	jobRecreating updateJobStatus = "recreating"
-	jobDone       updateJobStatus = "done"
-	jobFailed     updateJobStatus = "failed"
+	// jobUpdating is a swarm service rollout: the orchestrator replaces every
+	// replica rather than us replacing one container.
+	jobUpdating updateJobStatus = "updating"
+	jobDone     updateJobStatus = "done"
+	jobFailed   updateJobStatus = "failed"
 )
 
 // updateJob describes the in-flight state of a container update.

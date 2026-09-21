@@ -29,6 +29,10 @@ Environment=VERSION=1
 Environment=POST=1
 Environment=IMAGES=1
 # --- Everything else stays disabled (least privilege) -----------------------
+# Docker Swarm is monitored without any extra permission, but rolling a service
+# needs the services API. Uncomment to opt in — /services exposes full service
+# definitions (env vars, secret names, registry config) to the proxy.
+# Environment=SERVICES=1
 Environment=ALLOW_ARCHIVE=0
 Environment=ALLOW_CHANGES=0
 Environment=ALLOW_EXPORT=0

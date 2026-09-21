@@ -18,6 +18,10 @@ export interface Server {
   docker_host?: string
   /** Direct endpoints only: whether TLS material is configured. */
   tls?: boolean
+  /** Swarm position: none | worker | manager. */
+  swarm_role?: string
+  /** True once the services API is reachable, i.e. swarm updates are opted in. */
+  swarm_services?: boolean
 }
 
 export interface Stack {
@@ -67,6 +71,11 @@ export interface Container {
   systemd_unit?: string
   /** True when the container is managed by systemd and must be updated there. */
   managed: boolean
+  /** Swarm membership, present when the container is a service task. */
+  swarm_service_id?: string
+  swarm_service_name?: string
+  swarm_task_id?: string
+  swarm_node_id?: string
   updated_at: string
   server_name: string
   update: Update | null

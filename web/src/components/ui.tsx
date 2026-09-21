@@ -110,14 +110,17 @@ const badgeVariants: Record<BadgeVariant, string> = {
 export function Badge({
   variant = 'default',
   className,
+  title,
   children,
 }: {
   variant?: BadgeVariant
   className?: string
+  title?: string
   children: ReactNode
 }) {
   return (
     <span
+      title={title}
       className={cx(
         'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-4',
         badgeVariants[variant],
