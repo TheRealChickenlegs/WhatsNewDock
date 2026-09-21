@@ -128,7 +128,7 @@ export function useContainerActions(refetch: () => void) {
   ) : null
 
   const feedbackEl = bannerEl || progressEl ? (
-    <div className="flex flex-col items-end gap-2">
+    <div className="flex w-full flex-col gap-2 sm:w-auto sm:items-end">
       {bannerEl}
       {progressEl}
     </div>

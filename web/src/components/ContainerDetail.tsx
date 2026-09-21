@@ -34,9 +34,9 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
       {!c ? (
         <Loading />
       ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[260px_1fr]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           {/* Details column */}
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2.5 text-sm">
               <InfoRow label="Server" value={c.server_name} />
               <InfoRow label="Stack" value={c.stack_name || '—'} />
@@ -109,7 +109,7 @@ export default function ContainerDetail({ container, isAdmin, onClose, onUpdate,
           </div>
 
           {/* Changelog column */}
-          <div>
+          <div className="min-w-0">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-foreground">Changelog</h3>
               {loading && <Loading label="" />}

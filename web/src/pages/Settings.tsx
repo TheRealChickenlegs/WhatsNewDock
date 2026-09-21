@@ -214,24 +214,34 @@ function UserManagement() {
       <CardHeader title="Users" subtitle="Local accounts for username/password authentication." />
       <div className="divide-y divide-border">
         {(users || []).map((u) => (
-          <div key={u.id} className="flex items-center gap-3 px-5 py-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
+          /* The row wraps on phones so the username is never squeezed to a few
+             pixels by the role selector and the action buttons. */
+          <div key={u.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-semibold text-foreground">
               {u.username.slice(0, 1).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-foreground">{u.username}</div>
-              <div className="text-xs text-muted-foreground">Created {formatDate(u.created_at)}</div>
+              <div className="truncate text-sm font-medium text-foreground">{u.username}</div>
+              <div className="truncate text-xs text-muted-foreground">Created {formatDate(u.created_at)}</div>
             </div>
-            <Select value={u.role} onChange={(e) => changeRole(u, e.target.value)} className="w-28">
-              <option value="admin">admin</option>
-              <option value="viewer">viewer</option>
-            </Select>
-            <Button variant="ghost" size="sm" onClick={() => setPwUser(u)}>
-              Set password
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => deleteUser(u)}>
-              <Trash2 className="h-4 w-4 text-danger" />
-            </Button>
+            <div className="flex w-full items-center gap-2 sm:w-auto">
+              <Select value={u.role} onChange={(e) => changeRole(u, e.target.value)} className="w-28">
+                <option value="admin">admin</option>
+                <option value="viewer">viewer</option>
+              </Select>
+              <Button variant="ghost" size="sm" onClick={() => setPwUser(u)}>
+                Set password
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-auto sm:ml-0"
+                aria-label={`Delete ${u.username}`}
+                onClick={() => deleteUser(u)}
+              >
+                <Trash2 className="h-4 w-4 text-danger" />
+              </Button>
+            </div>
           </div>
         ))}
       </div>

@@ -16,7 +16,7 @@ export default function UpdateProgressPanel({
   const textColor = failed ? 'text-danger' : done ? 'text-success' : 'text-muted-foreground'
 
   return (
-    <div className="flex w-full min-w-[260px] max-w-sm flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-card">
+    <div className="flex w-full min-w-0 max-w-sm flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-card sm:min-w-[260px]">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           {done && <CheckCircle2 className="h-4 w-4 shrink-0 text-success" />}

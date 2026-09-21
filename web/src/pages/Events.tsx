@@ -28,13 +28,17 @@ export default function Events() {
       ) : (
         <Card className="divide-y divide-border">
           {(events || []).map((e) => (
-            <div key={e.id} className="flex items-center gap-3 px-5 py-3">
+            /* On phones the badge and timestamp share the first line and the
+               message gets its own full-width row; from sm up it is one row. */
+            <div key={e.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 sm:flex-nowrap sm:px-5">
               <Badge variant={kindVariant(e.kind)}>{e.kind}</Badge>
-              <div className="min-w-0 flex-1">
-                <span className="text-sm text-foreground">{e.message}</span>
-                <div className="text-xs text-muted-foreground">by {e.actor}</div>
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground sm:order-last sm:ml-0">
+                {formatDate(e.timestamp)}
+              </span>
+              <div className="w-full min-w-0 sm:w-auto sm:flex-1">
+                <span className="break-words text-sm text-foreground">{e.message}</span>
+                <div className="truncate text-xs text-muted-foreground">by {e.actor}</div>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">{formatDate(e.timestamp)}</span>
             </div>
           ))}
         </Card>

@@ -171,7 +171,7 @@ export default function Servers() {
                         renderName={(n) => (
                           <Link
                             to={`/servers/${s.id}`}
-                            className="text-sm font-semibold text-foreground hover:text-primary"
+                            className="inline-flex min-h-[28px] items-center text-sm font-semibold text-foreground hover:text-primary"
                           >
                             {n}
                           </Link>
@@ -180,7 +180,7 @@ export default function Servers() {
                     ) : (
                       <Link
                         to={`/servers/${s.id}`}
-                        className="text-sm font-semibold text-foreground hover:text-primary"
+                        className="inline-flex min-h-[28px] items-center text-sm font-semibold text-foreground hover:text-primary"
                       >
                         {s.name}
                       </Link>

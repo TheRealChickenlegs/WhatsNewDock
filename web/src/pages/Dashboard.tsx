@@ -41,7 +41,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Overview</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
@@ -83,7 +83,7 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold text-foreground">Recent updates available</h2>
           <Link
             to="/updates"
-            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+            className="inline-flex min-h-[28px] items-center gap-1 py-1 text-xs font-medium text-primary hover:underline"
           >
             View all <ArrowRight className="h-3.5 w-3.5" />
           </Link>
@@ -102,22 +102,24 @@ export default function Dashboard() {
                 key={c.id}
                 onClick={() => setSelected(c)}
                 title="View changelog"
-                className="flex cursor-pointer items-center gap-3 px-5 py-3 transition-colors hover:bg-card-hover"
+                className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 transition-colors hover:bg-card-hover sm:flex-nowrap sm:px-5"
               >
-                <div className="min-w-0 flex-1">
+                <div className="w-full min-w-0 sm:w-auto sm:flex-1">
                   <div className="truncate text-sm font-medium text-foreground">{c.name}</div>
                   <div className="truncate font-mono text-xs text-muted-foreground">{c.image_name}</div>
                 </div>
-                <Badge variant="default">{registryLabel(c.registry)}</Badge>
-                <span className="font-mono text-xs text-muted-foreground">{c.image_tag}</span>
-                <span className="text-muted-foreground">→</span>
-                <span className="font-mono text-xs font-medium text-success">{c.update?.latest_tag}</span>
-                {c.update && c.update.versions_behind > 1 && (
-                  <Badge variant="primary">{c.update.versions_behind} versions</Badge>
-                )}
-                <span className="hidden text-xs text-muted-foreground sm:inline">
-                  {timeAgo(c.update?.checked_at || '')}
-                </span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="default">{registryLabel(c.registry)}</Badge>
+                  <span className="font-mono text-xs text-muted-foreground">{c.image_tag}</span>
+                  <span className="text-muted-foreground">→</span>
+                  <span className="font-mono text-xs font-medium text-success">{c.update?.latest_tag}</span>
+                  {c.update && c.update.versions_behind > 1 && (
+                    <Badge variant="primary">{c.update.versions_behind} versions</Badge>
+                  )}
+                  <span className="hidden text-xs text-muted-foreground sm:inline">
+                    {timeAgo(c.update?.checked_at || '')}
+                  </span>
+                </div>
               </div>
             ))}
           </div>

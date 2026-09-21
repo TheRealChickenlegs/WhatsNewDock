@@ -55,7 +55,7 @@ export default function ServerNameEdit({ id, name, onSaved, renderName }: Props)
           onClick={save}
           disabled={busy}
           title="Save"
-          className="rounded-md p-1 text-success hover:bg-card-hover"
+          className="rounded-md p-2 text-success hover:bg-card-hover"
         >
           <Check className="h-4 w-4" />
         </button>
@@ -63,7 +63,7 @@ export default function ServerNameEdit({ id, name, onSaved, renderName }: Props)
           onClick={cancel}
           disabled={busy}
           title="Cancel"
-          className="rounded-md p-1 text-muted-foreground hover:bg-card-hover"
+          className="rounded-md p-2 text-muted-foreground hover:bg-card-hover"
         >
           <X className="h-4 w-4" />
         </button>
@@ -80,7 +80,7 @@ export default function ServerNameEdit({ id, name, onSaved, renderName }: Props)
           setEditing(true)
         }}
         title="Rename server"
-        className="rounded-md p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-card-hover hover:text-foreground group-hover/name:opacity-100 focus:opacity-100"
+        className="rounded-md p-2 text-muted-foreground transition-opacity hover:bg-card-hover hover:text-foreground sm:opacity-0 sm:group-hover/name:opacity-100 focus:opacity-100"
       >
         <Pencil className="h-3.5 w-3.5" />
       </button>

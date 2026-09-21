@@ -62,7 +62,7 @@ export default function ContainerExplorer({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-foreground">{title}</h1>
           {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
@@ -72,7 +72,7 @@ export default function ContainerExplorer({
 
       {showFilters && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3">
-          <div className="relative min-w-[220px] flex-1">
+          <div className="relative w-full min-w-0 sm:min-w-[220px] sm:flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               className="pl-9"
@@ -81,7 +81,11 @@ export default function ContainerExplorer({
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Select value={server} onChange={(e) => { setServer(e.target.value); setStack('') }}>
+          <Select
+            className="min-w-0 max-w-full flex-1 sm:flex-none"
+            value={server}
+            onChange={(e) => { setServer(e.target.value); setStack('') }}
+          >
             <option value="">All servers</option>
             {(servers || []).map((s) => (
               <option key={s.id} value={s.id}>
@@ -89,7 +93,11 @@ export default function ContainerExplorer({
               </option>
             ))}
           </Select>
-          <Select value={stack} onChange={(e) => setStack(e.target.value)}>
+          <Select
+            className="min-w-0 max-w-full flex-1 sm:flex-none"
+            value={stack}
+            onChange={(e) => setStack(e.target.value)}
+          >
             <option value="">All stacks</option>
             {filteredStacks.map((s) => (
               <option key={s.id} value={s.id}>
@@ -97,7 +105,11 @@ export default function ContainerExplorer({
               </option>
             ))}
           </Select>
-          <Select value={state} onChange={(e) => setState(e.target.value)}>
+          <Select
+            className="min-w-0 max-w-full flex-1 sm:flex-none"
+            value={state}
+            onChange={(e) => setState(e.target.value)}
+          >
             <option value="">Any state</option>
             <option value="running">Running</option>
             <option value="stopped">Stopped</option>
@@ -115,6 +127,7 @@ export default function ContainerExplorer({
               variant="ghost"
               size="icon"
               title="Clear filters"
+              aria-label="Clear filters"
               onClick={() => {
                 setSearch('')
                 setServer('')

@@ -379,6 +379,30 @@ cd web && npm run dev
 The backend serves the UI from embedded assets; `make build` compiles the
 frontend into `internal/webui/dist` before building the Go binary.
 
+### Checking the responsive layout
+
+The UI is designed for phones, tablets and desktops. `web/scripts/responsive-audit.mjs`
+drives a real browser through every page at seven viewport widths (320 px up to
+1440 px) and fails if the layout regresses — a sidebar that eats the screen, a
+content column squeezed to nothing, anything spilling out of its box, a
+container list that scrolls sideways instead of becoming cards, changelog tables
+escaping their wrapper, undersized tap targets, or a dirty browser console.
+
+Playwright is not a project dependency; install it on demand:
+
+```bash
+cd web
+npm i -D playwright && npx playwright install chromium
+npm run build && (cd .. && go run ./cmd/whatsnewdock)   # or: npm run dev
+node scripts/responsive-audit.mjs                       # BASE=http://127.0.0.1:8080 to target a server
+```
+
+Screenshots of every page/viewport land in `/tmp/wnd-ui/shots`.
+
+Note that the server sends `default-src 'self'`, so the UI deliberately loads no
+fonts or scripts from a CDN — it uses the system font stack. To use Inter and
+JetBrains Mono, self-host them under `web/public/` and add `@font-face` rules.
+
 ### Testing the update flow against a real runtime
 
 Most of the recreate logic is covered by unit tests against a fake daemon, but

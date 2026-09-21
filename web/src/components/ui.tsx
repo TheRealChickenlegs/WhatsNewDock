@@ -224,17 +224,24 @@ export function Toggle({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={cx(
-        'relative h-5 w-9 rounded-full transition-colors disabled:opacity-50 cursor-pointer',
-        checked ? 'bg-primary' : 'bg-muted',
-      )}
+      // The track stays small, but the button itself is padded out to a
+      // comfortable touch target; the negative margin keeps the layout
+      // footprint identical to the unpadded switch.
+      className="-m-2 shrink-0 cursor-pointer p-2 disabled:opacity-50"
     >
       <span
         className={cx(
-          'absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
-          checked ? 'translate-x-[18px]' : 'translate-x-0.5',
+          'relative block h-5 w-9 rounded-full transition-colors',
+          checked ? 'bg-primary' : 'bg-muted',
         )}
-      />
+      >
+        <span
+          className={cx(
+            'absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white transition-transform',
+            checked ? 'translate-x-[18px]' : 'translate-x-0.5',
+          )}
+        />
+      </span>
     </button>
   )
 }
@@ -255,19 +262,26 @@ export function Modal({
 }) {
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:p-8" role="dialog">
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center sm:items-start sm:p-8"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
         className={cx(
-          'relative z-10 flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl',
-          wide ? 'max-w-4xl' : 'max-w-lg',
+          // Phones get a bottom sheet that never exceeds the visible viewport;
+          // larger screens get a centred card. `dvh` tracks the mobile URL bar.
+          'relative z-10 flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl',
+          'sm:max-h-[85dvh] sm:rounded-xl',
+          wide ? 'sm:max-w-4xl' : 'sm:max-w-lg',
         )}
       >
-        <div className="flex items-center justify-between border-b border-border px-5 py-3.5">
-          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3.5 sm:px-5">
+          <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">{title}</h2>
           <button
             onClick={onClose}
-            className="rounded-md p-1 text-muted-foreground hover:bg-card-hover hover:text-foreground"
+            className="shrink-0 rounded-md p-2 text-muted-foreground hover:bg-card-hover hover:text-foreground sm:p-1"
             aria-label="Close"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -275,7 +289,7 @@ export function Modal({
             </svg>
           </button>
         </div>
-        <div className="overflow-y-auto px-5 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">{children}</div>
       </div>
     </div>
   )

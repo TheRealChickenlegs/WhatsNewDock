@@ -79,7 +79,7 @@ export default function ChangelogView({
           href={sourceUrl}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+          className="inline-flex min-h-[32px] items-center gap-1 py-1 text-xs text-primary hover:underline"
         >
           View source repository <ExternalLink className="h-3 w-3" />
         </a>
@@ -95,12 +95,12 @@ export default function ChangelogView({
             <div key={r.id || r.tag} className="overflow-hidden rounded-lg border border-border bg-background">
               <button
                 onClick={() => toggle(r.tag)}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-card-hover"
+                className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2.5 text-left hover:bg-card-hover sm:flex-nowrap sm:px-4"
               >
                 <ChevronDown
                   className={cx('h-4 w-4 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')}
                 />
-                <span className="font-mono text-sm font-medium text-foreground">{r.tag}</span>
+                <span className="min-w-0 break-all font-mono text-sm font-medium text-foreground">{r.tag}</span>
                 {isNew && <Badge variant="primary">new</Badge>}
                 {isCurrent && <Badge variant="success">current</Badge>}
                 {r.prerelease && <Badge variant="warning">pre-release</Badge>}
@@ -109,13 +109,27 @@ export default function ChangelogView({
                 </span>
               </button>
               {expanded && (
-                <div className="border-t border-border px-4 py-3">
+                <div className="border-t border-border px-3 py-3 sm:px-4">
                   {r.title && r.title !== r.tag && (
                     <h4 className="mb-2 text-sm font-semibold text-foreground">{r.title}</h4>
                   )}
                   {r.body ? (
-                    <div className="md-body">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{r.body}</ReactMarkdown>
+                    <div className="md-body min-w-0">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          // Release notes love wide tables. Give them their own
+                          // scroll container rather than letting them push the
+                          // whole panel — and the page — sideways.
+                          table: ({ children }) => (
+                            <div className="md-table-scroll">
+                              <table>{children}</table>
+                            </div>
+                          ),
+                        }}
+                      >
+                        {r.body}
+                      </ReactMarkdown>
                     </div>
                   ) : (
                     <p className="text-sm text-muted-foreground">No release notes provided.</p>
@@ -125,7 +139,7 @@ export default function ChangelogView({
                       href={r.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                      className="mt-1 inline-flex min-h-[32px] items-center gap-1 py-1 text-xs text-primary hover:underline"
                     >
                       Open release <ExternalLink className="h-3 w-3" />
                     </a>

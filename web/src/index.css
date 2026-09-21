@@ -44,6 +44,11 @@ body,
   height: 100%;
 }
 
+html {
+  /* Stop iOS Safari from inflating text in landscape. */
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   background-color: rgb(var(--background));
   color: rgb(var(--foreground));
@@ -74,6 +79,17 @@ body {
   line-height: 1.65;
   color: rgb(var(--foreground));
   word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+/* iOS zooms the page when a control smaller than 16px receives focus. */
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 .md-body h1,
 .md-body h2,
@@ -126,10 +142,20 @@ body {
   color: rgb(var(--muted-foreground));
 }
 .md-body img { max-width: 100%; border-radius: 0.5rem; }
+/* Wide release-note tables scroll inside their own box instead of stretching
+   the panel (and the page) sideways. */
+.md-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .md-body table {
   width: 100%;
   border-collapse: collapse;
   margin: 0.8em 0;
+}
+.md-body th {
+  white-space: nowrap;
 }
 .md-body th,
 .md-body td {
