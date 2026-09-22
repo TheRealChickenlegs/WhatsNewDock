@@ -83,6 +83,10 @@ export default function SelfUpdateCard() {
 
   const run: SelfUpdateRun | undefined = runData?.run
   const running = Boolean(run && !run.finished)
+  // A run that stopped short — usually an agent that did not come back — leaves
+  // this controller alone. Say so here, or the card simply reappears and the
+  // reason is only visible in Events.
+  const failedRun = run && run.finished && run.error ? run : undefined
 
   if (running) return <RunPanel run={run!} />
 
@@ -146,6 +150,19 @@ export default function SelfUpdateCard() {
                 </>
               )}
             </div>
+
+            {failedRun && (
+              <div className="mt-2 rounded-md border border-danger/40 bg-danger/10 px-2 py-1.5 text-[11px] text-danger">
+                <div className="break-words">{failedRun.error}</div>
+                {failedRun.agents
+                  .filter((a) => a.status === 'failed')
+                  .map((a) => (
+                    <div key={a.server_id} className="mt-0.5 break-words text-danger/90">
+                      {a.name}: {a.message || 'did not update'}
+                    </div>
+                  ))}
+              </div>
+            )}
 
             {started ? (
               <div className="mt-2 flex items-center gap-2 text-[11px] text-muted-foreground">
