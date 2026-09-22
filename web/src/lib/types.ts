@@ -22,6 +22,38 @@ export interface Server {
   swarm_role?: string
   /** True once the services API is reachable, i.e. swarm updates are opted in. */
   swarm_services?: boolean
+  /** Agents only: the build the agent last reported. */
+  agent_version?: string
+  agent_image?: string
+  /** current | behind | unknown — how the agent compares with this deployment. */
+  agent_build?: 'current' | 'behind' | 'unknown' | ''
+}
+
+/** One agent's progress through an orchestrated self-update. */
+export interface AgentUpdate {
+  server_id: string
+  name: string
+  from?: string
+  to?: string
+  status: 'queued' | 'updated' | 'failed' | 'skipped'
+  message?: string
+}
+
+export interface SelfUpdateRun {
+  id: string
+  started_at: string
+  phase: 'agents' | 'controller' | 'done' | 'failed'
+  kind?: string
+  target?: string
+  message?: string
+  error?: string
+  agents: AgentUpdate[]
+  finished: boolean
+}
+
+export interface SelfUpdateRunResponse {
+  active: boolean
+  run?: SelfUpdateRun
 }
 
 export interface Stack {

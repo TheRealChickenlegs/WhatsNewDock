@@ -285,3 +285,17 @@ func parseVersion(s string) (version, bool) {
 	}
 	return v, true
 }
+
+// TagOf returns the tag of an image reference, or "" when it has none.
+func TagOf(image string) string {
+	base := image
+	if i := strings.IndexByte(base, '@'); i >= 0 {
+		base = base[:i]
+	}
+	slash := strings.LastIndexByte(base, '/')
+	colon := strings.LastIndexByte(base, ':')
+	if colon <= slash {
+		return ""
+	}
+	return base[colon+1:]
+}

@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext'
 import type { Server, Stack } from '@/lib/types'
 import { Badge, Card, Loading } from '@/components/ui'
 import ServerNameEdit from '@/components/ServerNameEdit'
-import { formatBytes, timeAgo } from '@/lib/utils'
+import { formatVersion, formatBytes, timeAgo } from '@/lib/utils'
 import ContainerExplorer from '@/components/ContainerExplorer'
 
 export default function ServerDetail() {
@@ -59,6 +59,25 @@ export default function ServerDetail() {
             Docker {server?.docker_version || '—'} · {server?.os || '—'} / {server?.arch || '—'} · last
             seen {timeAgo(server?.last_seen || '')}
           </p>
+          {server?.kind === 'agent' && (
+            <p className="mt-1 text-xs">
+              <span className="text-muted-foreground">Agent </span>
+              <span
+                className={
+                  server.agent_build === 'current'
+                    ? 'font-mono text-success'
+                    : server.agent_build === 'behind'
+                      ? 'font-mono text-danger'
+                      : 'font-mono text-muted-foreground'
+                }
+              >
+                {server.agent_version ? formatVersion(server.agent_version) : 'unknown'}
+              </span>
+              {server.agent_build === 'behind' && (
+                <span className="text-muted-foreground"> · behind this deployment</span>
+              )}
+            </p>
+          )}
         </div>
         <div className="ml-auto flex gap-3 text-xs text-muted-foreground">
           <span className="inline-flex items-center gap-1.5">

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,23 +24,30 @@ import (
 
 // Agent is the agent-mode runtime.
 type Agent struct {
-	cfg     config.AgentConfig
-	docker  *dockerx.Client
-	http    *http.Client
-	version string
+	cfg        config.AgentConfig
+	docker     *dockerx.Client
+	http       *http.Client
+	version    string
+	dockerHost string
+	// selfImage/selfDigest describe this agent's own container, resolved once.
+	selfImage  string
+	selfDigest string
 }
 
-// New builds an agent.
-func New(cfg config.AgentConfig, docker *dockerx.Client, version string) *Agent {
+// New builds an agent. dockerHost is the endpoint this agent reaches Docker
+// through; it is handed to the self-update helper so the helper can reach the
+// same place.
+func New(cfg config.AgentConfig, docker *dockerx.Client, version, dockerHost string) *Agent {
 	tr := &http.Transport{}
 	if cfg.TLSSkipVerify {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- explicit opt-in for self-signed/development servers
 	}
 	return &Agent{
-		cfg:     cfg,
-		docker:  docker,
-		version: version,
-		http:    &http.Client{Transport: tr, Timeout: 30 * time.Second},
+		cfg:        cfg,
+		docker:     docker,
+		version:    version,
+		dockerHost: dockerHost,
+		http:       &http.Client{Transport: tr, Timeout: 30 * time.Second},
 	}
 }
 
@@ -84,6 +92,12 @@ func (a *Agent) reportOnce(ctx context.Context) {
 		Info:       snap.Server,
 		Stacks:     derefStacks(snap.Stacks),
 		Containers: derefContainers(snap.Containers),
+		SelfImage:  a.selfImage,
+		SelfDigest: a.selfDigest,
+	}
+	if rep.SelfImage == "" {
+		// Resolved once: the container this process runs in does not change.
+		rep.SelfImage, rep.SelfDigest = a.resolveSelf(ctx)
 	}
 	if err := a.postJSON(ctx, "/api/agent/v1/report", rep, nil); err != nil {
 		slog.Error("report failed", "err", err)
@@ -114,11 +128,58 @@ func (a *Agent) execute(ctx context.Context, cmd protocol.Command) error {
 		} else {
 			res = protocol.CommandResult{Status: "done", Message: "container recreated with " + cmd.TargetImage}
 		}
+	case "self_update":
+		// Redeploy this agent onto a newer image. The work is done by a helper
+		// container, because replacing ourselves would kill the process that is
+		// posting this result. The server treats the agent reporting back on the
+		// new image as the real success signal, so a lost reply is harmless.
+		res = a.selfUpdate(ctx, cmd.TargetImage)
 	default:
 		res = protocol.CommandResult{Status: "failed", Message: "unknown command kind " + cmd.Kind}
 	}
 	body, _ := json.Marshal(res)
 	return a.postJSON(ctx, "/api/agent/v1/commands/"+cmd.ID+"/result", nil, body)
+}
+
+// selfImage and selfDigest describe the container this agent runs in. They are
+// resolved once and cached.
+func (a *Agent) resolveSelf(ctx context.Context) (image, digest string) {
+	id := dockerx.SelfContainerID()
+	if id == "" {
+		return "", ""
+	}
+	image, digest, err := a.docker.SelfImage(ctx, id)
+	if err != nil {
+		slog.Debug("cannot describe own container", "err", err)
+		return "", ""
+	}
+	a.selfImage, a.selfDigest = image, digest
+	slog.Info("agent runs from", "image", image, "digest", digest)
+	return image, digest
+}
+
+// selfUpdate redeploys this agent onto target. It never runs when the agent
+// cannot identify its own container, which is also what stops an agent in an
+// unusual runtime from replacing the wrong thing.
+func (a *Agent) selfUpdate(ctx context.Context, target string) protocol.CommandResult {
+	if target == "" {
+		return protocol.CommandResult{Status: "failed", Message: "no target image was given"}
+	}
+	selfID := dockerx.SelfContainerID()
+	if selfID == "" {
+		return protocol.CommandResult{Status: "failed",
+			Message: "this agent cannot identify its own container, so it cannot update itself"}
+	}
+	// Make sure the server knows what we are moving from.
+	a.resolveSelf(ctx)
+	slog.Info("updating the agent", "target", target)
+	if err := a.docker.StartSelfUpdate(ctx, selfID, target, a.dockerHost); err != nil {
+		if errors.Is(err, dockerx.ErrAlreadyCurrent) {
+			return protocol.CommandResult{Status: "done", Message: "already running " + target}
+		}
+		return protocol.CommandResult{Status: "failed", Message: err.Error()}
+	}
+	return protocol.CommandResult{Status: "done", Message: "redeploying onto " + target}
 }
 
 func (a *Agent) postJSON(ctx context.Context, path string, payload any, raw []byte) error {

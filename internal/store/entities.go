@@ -49,7 +49,7 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-const serverColumns = `id, name, is_local, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, kind, docker_host, tls_ca, tls_cert, tls_key, name_custom, swarm_role, swarm_services, created_at, updated_at`
+const serverColumns = `id, name, is_local, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, kind, docker_host, tls_ca, tls_cert, tls_key, name_custom, swarm_role, swarm_services, agent_version, agent_image, agent_digest, created_at, updated_at`
 const serverSelect = `SELECT ` + serverColumns + ` FROM servers`
 
 // scanServer scans a single server row into a Server.
@@ -57,11 +57,13 @@ func scanServer(sc scanner) (*Server, error) {
 	var v Server
 	var lastSeen, dockerVer, osName, archName, labelsRaw sql.NullString
 	var kind, dockerHost, tlsCA, tlsCert, tlsKey, swarmRole sql.NullString
+	var agentVersion, agentImage, agentDigest sql.NullString
 	var createdStr, updatedStr string
 	if err := sc.Scan(&v.ID, &v.Name, &v.IsLocal, &v.Status, &lastSeen, &dockerVer,
 		&osName, &archName, &v.CPUs, &v.MemoryBytes, &labelsRaw,
 		&kind, &dockerHost, &tlsCA, &tlsCert, &tlsKey, &v.NameCustom,
 		&swarmRole, &v.SwarmServices,
+		&agentVersion, &agentImage, &agentDigest,
 		&createdStr, &updatedStr); err != nil {
 		return nil, err
 	}
@@ -76,6 +78,9 @@ func scanServer(sc scanner) (*Server, error) {
 	if v.SwarmRole == "" {
 		v.SwarmRole = SwarmNone
 	}
+	v.AgentVersion = agentVersion.String
+	v.AgentImage = agentImage.String
+	v.AgentDigest = agentDigest.String
 	v.DockerHost = dockerHost.String
 	v.TLSCA = tlsCA.String
 	v.TLSCert = tlsCert.String
@@ -534,18 +539,21 @@ func (s *Store) ReplaceServerSnapshot(srv *Server, stacks []*Stack, containers [
 	// vice versa). A name an operator chose by hand likewise wins over the
 	// hostname reported by the daemon.
 	if _, err := tx.Exec(`
-		INSERT INTO servers(id, name, is_local, kind, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, name_custom, swarm_role, swarm_services, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO servers(id, name, is_local, kind, status, last_seen, docker_version, os, arch, cpus, memory_bytes, labels, name_custom, swarm_role, swarm_services, agent_version, agent_image, agent_digest, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = CASE WHEN servers.name_custom = 1 THEN servers.name ELSE excluded.name END,
 			status = excluded.status, last_seen = excluded.last_seen,
 			docker_version = excluded.docker_version, os = excluded.os, arch = excluded.arch,
 			cpus = excluded.cpus, memory_bytes = excluded.memory_bytes, labels = excluded.labels,
 			swarm_role = excluded.swarm_role, swarm_services = excluded.swarm_services,
+			agent_version = excluded.agent_version, agent_image = excluded.agent_image,
+			agent_digest = excluded.agent_digest,
 			updated_at = excluded.updated_at`,
 		srv.ID, srv.Name, boolInt(srv.IsLocal), string(srv.Kind), srv.Status, ts(srv.LastSeen), srv.DockerVersion,
 		srv.OS, srv.Arch, srv.CPUs, srv.MemoryBytes, marshalList(srv.Labels), boolInt(srv.NameCustom),
 		swarmRoleOrNone(srv.SwarmRole), boolInt(srv.SwarmServices),
+		nullable(srv.AgentVersion), nullable(srv.AgentImage), nullable(srv.AgentDigest),
 		ts(srv.CreatedAt), ts(srv.UpdatedAt),
 	); err != nil {
 		return err

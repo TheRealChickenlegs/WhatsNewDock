@@ -167,6 +167,12 @@ func SelfUpdateHelperConfig(selfImage, selfID, targetImage string, access Helper
 // so a leftover from a previous attempt is cleared before creating a new one.
 const selfUpdateHelperName = "whatsnewdock-self-update"
 
+// ErrAlreadyCurrent means the target reference already resolves to the image
+// this container is running: there is nothing to deploy. It is a normal outcome,
+// not a failure — an orchestrated update sends every agent the same target and
+// the ones that are already current say so.
+var ErrAlreadyCurrent = fmt.Errorf("already running the newest build")
+
 // StartSelfUpdate launches the helper that will replace this container.
 //
 // It returns as soon as the helper is running; the caller should tell the user
@@ -191,7 +197,7 @@ func startSelfUpdate(ctx context.Context, d containerDaemon, selfID, targetImage
 	}
 	if insp.Config.Image == targetImage {
 		if img, err := d.ImageInspect(ctx, targetImage); err == nil && img.ID == insp.Image {
-			return fmt.Errorf("already running the newest build of %s", targetImage)
+			return fmt.Errorf("%w of %s", ErrAlreadyCurrent, targetImage)
 		}
 	}
 

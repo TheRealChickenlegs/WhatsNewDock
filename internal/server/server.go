@@ -52,7 +52,19 @@ type Server struct {
 	// selfUpdate checks whether a newer WhatsNewDock release exists. It never
 	// touches this deployment; applying an update is a separate user action.
 	selfUpdate *selfupdate.Checker
+	// selfRun is the live agent-then-controller update run, if any.
+	selfRun *selfUpdateTracker
 }
+
+// selfUpdateSelfID is the container this process runs in.
+func selfUpdateSelfID() string { return dockerx.SelfContainerID() }
+
+// How long agents are given to come back, and how often we look. Variables so
+// tests can shrink them; the defaults are deliberate.
+var (
+	agentUpdateTimeout = 3 * time.Minute
+	agentUpdatePoll    = 3 * time.Second
+)
 
 // selfUpdateImage is the image the running container was created from, used to
 // redeploy onto a newer tag. Empty when we cannot tell.
@@ -155,6 +167,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		trustedProxies: parseTrustedCIDRs(cfg.TrustedProxies),
 		loginLimiter:   newLoginLimiter(),
 		jobs:           newJobTracker(),
+		selfRun:        &selfUpdateTracker{},
 	}
 	s.selfUpdate = selfupdate.New(s.currentBuild, func(ctx context.Context) (*selfupdate.Release, error) {
 		rel, err := ch.LatestRelease(ctx, cfg.SelfUpdate.Repo)

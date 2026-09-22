@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS servers (
 	name_custom    INTEGER NOT NULL DEFAULT 0,
 	swarm_role     TEXT NOT NULL DEFAULT 'none',
 	swarm_services INTEGER NOT NULL DEFAULT 0,
+	agent_version  TEXT,
+	agent_image    TEXT,
+	agent_digest   TEXT,
 	created_at     TEXT NOT NULL,
 	updated_at     TEXT NOT NULL
 );
@@ -211,6 +214,17 @@ var migrations = []migration{
 		version: 3, // keep user-chosen server names across snapshot reports
 		apply: func(tx *sql.Tx) error {
 			return addColumn(tx, "servers", "name_custom", "INTEGER NOT NULL DEFAULT 0")
+		},
+	},
+	{
+		version: 5, // what each agent reports about its own build
+		apply: func(tx *sql.Tx) error {
+			for _, c := range []string{"agent_version", "agent_image", "agent_digest"} {
+				if err := addColumn(tx, "servers", c, "TEXT"); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	},
 	{

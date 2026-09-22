@@ -168,3 +168,22 @@ func (s *Store) UpdateCommandResult(id, status, result string) error {
 		status, result, ts(timeNow()), id)
 	return err
 }
+
+// GetCommand returns a single queued command, whatever its status, so a caller
+// can follow one it queued (an agent self-update, for instance) to completion.
+func (s *Store) GetCommand(id string) (*Command, error) {
+	var c Command
+	var target, result sql.NullString
+	var created, updated string
+	err := s.db.QueryRow(`SELECT id, server_id, kind, container_id, target_image, status, result, created_at, updated_at
+		FROM commands WHERE id = ?`, id).
+		Scan(&c.ID, &c.ServerID, &c.Kind, &c.ContainerID, &target, &c.Status, &result, &created, &updated)
+	if err != nil {
+		return nil, err
+	}
+	c.TargetImage = target.String
+	c.Result = result.String
+	c.CreatedAt = parseTS(created)
+	c.UpdatedAt = parseTS(updated)
+	return &c, nil
+}

@@ -96,7 +96,7 @@ func runAgent(ctx context.Context, cfg *config.Config) error {
 		return err
 	}
 	defer docker.Close()
-	a := agent.New(cfg.Agent, docker, version)
+	a := agent.New(cfg.Agent, docker, version, cfg.Docker.Host)
 	return a.Run(ctx)
 }
 

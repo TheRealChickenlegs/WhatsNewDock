@@ -51,6 +51,21 @@ func (s *Server) handleAgentReport(w http.ResponseWriter, r *http.Request) {
 	info.IsLocal = false
 	info.Status = "online"
 	info.LastSeen = now
+	// What the agent says about its own build, so it can be updated in step with
+	// the server rather than drifting behind.
+	info.AgentVersion = rep.Version
+	if rep.SelfImage != "" {
+		info.AgentImage = rep.SelfImage
+	} else {
+		info.AgentImage = srv.AgentImage
+	}
+	if rep.SelfDigest != "" {
+		info.AgentDigest = rep.SelfDigest
+	} else {
+		info.AgentDigest = srv.AgentDigest
+	}
+	info.SwarmRole = srv.SwarmRole
+	info.SwarmServices = srv.SwarmServices
 	if info.Name == "" {
 		info.Name = srv.Name
 	}

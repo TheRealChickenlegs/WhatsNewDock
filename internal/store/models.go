@@ -46,6 +46,11 @@ type Server struct {
 	// granting SERVICES to the socket proxy.
 	SwarmRole     SwarmRole `json:"swarm_role,omitempty"`
 	SwarmServices bool      `json:"swarm_services,omitempty"`
+	// AgentVersion/AgentImage/AgentDigest are what a remote agent last reported
+	// about its own build, so the server can update it in step with itself.
+	AgentVersion string `json:"agent_version,omitempty"`
+	AgentImage   string `json:"agent_image,omitempty"`
+	AgentDigest  string `json:"agent_digest,omitempty"`
 	// DockerHost is the Engine API endpoint for direct servers.
 	DockerHost string `json:"docker_host,omitempty"`
 	// TLS material is referenced by file path and never exposed over the API.

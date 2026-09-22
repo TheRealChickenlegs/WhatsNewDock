@@ -30,7 +30,7 @@ import {
 } from '@/components/ui'
 import ServerNameEdit from '@/components/ServerNameEdit'
 import DirectEndpointForm, { type EndpointValues } from '@/components/DirectEndpointForm'
-import { formatBytes, timeAgo } from '@/lib/utils'
+import { cx, formatBytes, formatVersion, timeAgo } from '@/lib/utils'
 
 type AddMode = 'agent' | 'direct'
 
@@ -271,6 +271,30 @@ export default function Servers() {
                     <span className="truncate font-mono text-foreground" title={s.docker_host}>
                       {s.docker_host || '—'}
                       {s.tls ? ' · tls' : ''}
+                    </span>
+                  </div>
+                )}
+                {s.kind === 'agent' && (
+                  <div className="flex items-center justify-between gap-2">
+                    <span>Agent</span>
+                    <span
+                      className={cx(
+                        'truncate font-mono',
+                        s.agent_build === 'current'
+                          ? 'text-success'
+                          : s.agent_build === 'behind'
+                            ? 'text-danger'
+                            : 'text-muted-foreground',
+                      )}
+                      title={
+                        s.agent_build === 'behind'
+                          ? 'Behind this deployment — it will be updated with the next self-update'
+                          : s.agent_build === 'current'
+                            ? 'Running the same build as this deployment'
+                            : 'This agent has not reported its build yet'
+                      }
+                    >
+                      {s.agent_version ? formatVersion(s.agent_version) : 'unknown'}
                     </span>
                   </div>
                 )}

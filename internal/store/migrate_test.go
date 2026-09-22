@@ -203,6 +203,13 @@ func TestMigrationUpgradesLegacyDatabase(t *testing.T) {
 	if c.SwarmTaskID != "" || c.SwarmServiceID != "" || c.SwarmServiceName != "" {
 		t.Errorf("migrated container should not be a swarm task: %+v", c)
 	}
+	// A migrated server has never reported an agent build, so nothing thinks an
+	// agent is running an unknown version.
+	for _, srv := range servers {
+		if srv.AgentVersion != "" || srv.AgentImage != "" || srv.AgentDigest != "" {
+			t.Errorf("migrated server %s has agent build info: %+v", srv.Name, srv)
+		}
+	}
 	// Migrated servers are not part of a swarm either, which is what keeps the
 	// swarm code path dormant on an existing deployment.
 	for _, srv := range servers {
@@ -265,6 +272,25 @@ func TestSwarmFieldsRoundTrip(t *testing.T) {
 	if plain.SwarmTaskID != "" || plain.SwarmServiceID != "" {
 		t.Errorf("a plain container gained swarm identity: %+v", plain)
 	}
+	// What an agent reports about its own build is recorded, so the server can
+	// update it in step with itself.
+	agent := &Server{ID: "ag1", Name: "edge", Kind: ServerAgent, Status: "online"}
+	if err := st.CreateServer(agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	rep := &Server{ID: "ag1", Name: "edge", Kind: ServerAgent, Status: "online",
+		AgentImage: "ghcr.io/x/wnd:0.1.1", AgentDigest: "sha256:abc", AgentVersion: "v0.1.1"}
+	if err := st.ReplaceServerSnapshot(rep, nil, nil); err != nil {
+		t.Fatalf("agent report: %v", err)
+	}
+	gotAgent, err := st.GetServer("ag1")
+	if err != nil {
+		t.Fatalf("get agent: %v", err)
+	}
+	if gotAgent.AgentVersion != "v0.1.1" || gotAgent.AgentImage != "ghcr.io/x/wnd:0.1.1" || gotAgent.AgentDigest != "sha256:abc" {
+		t.Errorf("agent build info lost: %+v", gotAgent)
+	}
+
 	// The services capability must survive a re-report that says otherwise on a
 	// host that is not a manager — it is only ever set by the probe.
 	if err := st.ReplaceServerSnapshot(&Server{ID: "sw1", Name: "manager", IsLocal: true,
@@ -300,7 +326,7 @@ func TestMigrationIsIdempotent(t *testing.T) {
 			versions[v]++
 		}
 		rows.Close()
-		for _, want := range []int{1, 2, 3, 4} {
+		for _, want := range []int{1, 2, 3, 4, 5} {
 			if versions[want] != 1 {
 				t.Errorf("open #%d: migration %d recorded %d times, want 1", i, want, versions[want])
 			}

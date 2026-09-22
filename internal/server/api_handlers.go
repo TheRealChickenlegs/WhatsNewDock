@@ -12,6 +12,7 @@ import (
 
 	"github.com/whatsnewdock/whatsnewdock/internal/config"
 	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
+	"github.com/whatsnewdock/whatsnewdock/internal/selfupdate"
 	"github.com/whatsnewdock/whatsnewdock/internal/server/auth"
 	"github.com/whatsnewdock/whatsnewdock/internal/store"
 )
@@ -148,7 +149,7 @@ func (s *Server) handleListServers(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(servers))
 	for _, srv := range servers {
-		out = append(out, serverJSON(srv))
+		out = append(out, s.serverJSON(srv))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -159,10 +160,33 @@ func (s *Server) handleGetServer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "server not found")
 		return
 	}
-	writeJSON(w, http.StatusOK, serverJSON(*srv))
+	writeJSON(w, http.StatusOK, s.serverJSON(*srv))
 }
 
-func serverJSON(srv store.Server) map[string]any {
+// agentBuildState says whether an agent is running what this deployment runs.
+//
+// The reference is the controller's own version, or the newest release when one
+// is waiting — so during a pending upgrade every agent correctly reads as behind
+// until it has caught up, rather than looking current because it matches the old
+// controller.
+func (s *Server) agentBuildState(srv store.Server) string {
+	if srv.Kind != store.ServerAgent {
+		return ""
+	}
+	if srv.AgentVersion == "" {
+		return "unknown"
+	}
+	reference := s.version
+	if res := s.selfUpdate.Cached(); res.Latest != "" && selfupdate.IsNewer(res.Latest, reference) {
+		reference = res.Latest
+	}
+	if selfupdate.IsNewer(reference, srv.AgentVersion) {
+		return "behind"
+	}
+	return "current"
+}
+
+func (s *Server) serverJSON(srv store.Server) map[string]any {
 	out := map[string]any{
 		"id":             srv.ID,
 		"name":           srv.Name,
@@ -178,6 +202,11 @@ func serverJSON(srv store.Server) map[string]any {
 		"labels":         srv.Labels,
 		"swarm_role":     string(srv.SwarmRole),
 		"swarm_services": srv.SwarmServices,
+	}
+	if srv.Kind == store.ServerAgent {
+		out["agent_version"] = srv.AgentVersion
+		out["agent_image"] = srv.AgentImage
+		out["agent_build"] = s.agentBuildState(srv)
 	}
 	// Only direct endpoints expose connection details; TLS material is never
 	// returned (it is referenced by file path on the host).

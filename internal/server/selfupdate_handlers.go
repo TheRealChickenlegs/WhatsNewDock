@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/whatsnewdock/whatsnewdock/internal/dockerx"
+	"github.com/whatsnewdock/whatsnewdock/internal/selfupdate"
 )
 
 // handleSelfUpdate reports what the app knows about its own updates. It never
@@ -41,6 +42,17 @@ func (s *Server) handleSelfUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleSelfUpdateRun reports the live agent-then-controller update, so the UI
+// can follow it up to the moment this process is replaced.
+func (s *Server) handleSelfUpdateRun(w http.ResponseWriter, r *http.Request) {
+	run := s.selfRun.get()
+	if run == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"active": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": !run.Finished, "run": run})
+}
+
 // handleCheckSelfUpdate runs a check on demand (admin only).
 func (s *Server) handleCheckSelfUpdate(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -68,12 +80,6 @@ func (s *Server) handleApplySelfUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	selfID := dockerx.SelfContainerID()
-	if selfID == "" {
-		writeError(w, http.StatusConflict,
-			"this instance cannot identify its own container, so it cannot redeploy itself — "+
-				"update the deployment with `docker compose pull && docker compose up -d`")
-		return
-	}
 
 	// Redeploy onto the image reference we are already using, with the tag
 	// swapped: that keeps the registry and repository the operator chose rather
@@ -89,22 +95,25 @@ func (s *Server) handleApplySelfUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Minute)
-	defer cancel()
-	if err := s.docker.StartSelfUpdate(ctx, selfID, target, s.cfg.Docker.Host); err != nil {
-		_ = s.st.AddEvent(s.eventNow("self_update_failed", selfUpdateActor(r, s), "", "", err.Error()))
-		writeError(w, http.StatusBadGateway, err.Error())
+	if selfID == "" {
+		writeError(w, http.StatusConflict,
+			"this instance cannot identify its own container, so it cannot redeploy itself — "+
+				"update the deployment with `docker compose pull && docker compose up -d`")
 		return
 	}
 
-	_ = s.st.AddEvent(s.eventNow("self_update_started", selfUpdateActor(r, s), "", "",
-		res.Current+" -> "+target))
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"started": true,
-		"from":    res.Current,
-		"to":      target,
-		"kind":    res.Kind,
-	})
+	// The agents go first; the controller is replaced only once they are back.
+	// The run is reported through /api/v1/selfupdate/run, because this process
+	// will not be around to answer by the time it finishes.
+	var body struct {
+		Force bool `json:"force"`
+	}
+	_ = readJSON(r, &body) // an empty body is fine
+
+	run := s.startSelfUpdateRun(
+		selfupdate.Result{Current: res.Current, Target: target, Kind: res.Kind, UpdateAvailable: true},
+		body.Force)
+	writeJSON(w, http.StatusAccepted, run)
 }
 
 func selfUpdateActor(r *http.Request, s *Server) string {

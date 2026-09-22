@@ -52,6 +52,7 @@ func (s *Server) routes() http.Handler {
 	// --- Self-update check and apply -------------------------------------
 	mux.Handle("GET /api/v1/selfupdate", s.requireSession(http.HandlerFunc(s.handleSelfUpdate)))
 	mux.Handle("POST /api/v1/selfupdate/check", s.requireAdmin(http.HandlerFunc(s.handleCheckSelfUpdate)))
+	mux.Handle("GET /api/v1/selfupdate/run", s.requireSession(http.HandlerFunc(s.handleSelfUpdateRun)))
 	mux.Handle("POST /api/v1/selfupdate/apply", s.requireAdmin(http.HandlerFunc(s.handleApplySelfUpdate)))
 	mux.Handle("GET /api/v1/events", s.requireSession(http.HandlerFunc(s.handleListEvents)))
 
