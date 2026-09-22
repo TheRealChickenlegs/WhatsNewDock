@@ -90,30 +90,91 @@ func TestComputeUpdateSkipsPrereleases(t *testing.T) {
 	}
 }
 
-func TestIsFloatingTag(t *testing.T) {
-	for _, tag := range []string{"latest", "stable", "LTS", "main", "rolling", "v2", "2", "v2.14", "2.14", "v1", "12"} {
-		if !isFloatingTag(tag) {
-			t.Errorf("expected %q to be floating", tag)
+// A tag classifies as a version pin exactly when parseVer accepts it: that is
+// the discriminator computeUpdate uses to choose between the release list and
+// the registry digest. Getting it wrong in the "no version" direction is what
+// made minor-pinned containers silent.
+func TestTagClassification(t *testing.T) {
+	pins := []string{
+		"1.25.0", "v2.14.0", "2.14.1", "v2.14.0-beta.1", "2024.01.01",
+		"release-2.10.3", "v2", "2", "v2.14", "2.14", "v1", "12", "1.25-alpine",
+	}
+	for _, tag := range pins {
+		if _, err := parseVer(tag); err != nil {
+			t.Errorf("expected %q to be treated as a version pin, got error: %v", tag, err)
 		}
 	}
-	for _, tag := range []string{"1.25.0", "v2.14.0", "2.14.1", "v2.14.0-beta.1", "2024.01.01", "release-2.10.3"} {
-		if isFloatingTag(tag) {
-			t.Errorf("expected %q to NOT be floating", tag)
+	floating := []string{"", "latest", "stable", "LTS", "main", "rolling", "mainline", "alpine", "server-cuda13", "bookworm-slim", "b10549"}
+	for _, tag := range floating {
+		if _, err := parseVer(tag); err == nil {
+			t.Errorf("expected %q to be treated as a floating tag, but it parsed as a version", tag)
 		}
 	}
 }
 
-func TestFloatingLine(t *testing.T) {
-	maj, min, hasMinor, ok := floatingLine("v2")
-	if !ok || maj != 2 || hasMinor {
-		t.Errorf("floatingLine(v2) = %d,%d,%v,%v", maj, min, hasMinor, ok)
+// TestComputeUpdateMinorPin reproduces the reported bug: a container pinned to
+// a partial version ("nginx:1.25") sat silent while 1.31 was available, because
+// the partial version was misread as a floating tag and the registry digest for
+// the exact tag still matched.
+func TestComputeUpdateMinorPin(t *testing.T) {
+	u := &Updater{cfg: &config.UpdatesConfig{}}
+	src := &changelog.Source{Type: changelog.SourceRegistry, Registry: "docker.io", Repository: "library/nginx"}
+	// A Docker Hub tag listing is not version-ordered and mixes unversioned
+	// aliases in with the releases.
+	rels := []changelog.Release{
+		rel("mainline", false),
+		rel("1.27.4-alpine", false),
+		rel("1.31.6", false),
+		rel("stable", false),
+		rel("1.25.5", false),
+		rel("1.30.5", false),
+		rel("1.25.5-alpine", false),
 	}
-	maj, min, hasMinor, ok = floatingLine("v2.14")
-	if !ok || maj != 2 || min != 14 || !hasMinor {
-		t.Errorf("floatingLine(v2.14) = %d,%d,%v,%v", maj, min, hasMinor, ok)
+	c := store.Container{ImageTag: "1.25", Registry: "docker.io", Repository: "library/nginx"}
+	upd, ok := u.computeUpdate(t.Context(), c, src, rels)
+	if !ok || upd == nil {
+		t.Fatal("expected an update for a minor-pinned tag")
 	}
-	if _, _, _, ok := floatingLine("latest"); ok {
-		t.Error("floatingLine(latest) should report ok=false")
+	if upd.LatestTag != "1.31.6" {
+		t.Errorf("LatestTag = %q, want 1.31.6", upd.LatestTag)
+	}
+	// 1.31.6 and 1.30.5 are newer lines; 1.25.5 is a same-line patch the
+	// running "1.25" tag already tracks, and the alpine builds are excluded.
+	if upd.VersionsBehind != 2 {
+		t.Errorf("VersionsBehind = %d, want 2", upd.VersionsBehind)
+	}
+}
+
+// A variant suffix is part of the pin, so the suggested target keeps it.
+func TestComputeUpdateKeepsVariantSuffix(t *testing.T) {
+	u := &Updater{cfg: &config.UpdatesConfig{}}
+	src := &changelog.Source{Type: changelog.SourceRegistry, Registry: "docker.io", Repository: "library/nginx"}
+	rels := []changelog.Release{
+		rel("1.27.4-alpine", false),
+		rel("1.31.6", false),
+		rel("1.25.5-alpine", false),
+	}
+	c := store.Container{ImageTag: "1.25-alpine", Registry: "docker.io", Repository: "library/nginx"}
+	upd, ok := u.computeUpdate(t.Context(), c, src, rels)
+	if !ok || upd == nil {
+		t.Fatal("expected an update for a variant-pinned tag")
+	}
+	if upd.LatestTag != "1.27.4-alpine" {
+		t.Errorf("LatestTag = %q, want 1.27.4-alpine", upd.LatestTag)
+	}
+	if upd.VersionsBehind != 1 {
+		t.Errorf("VersionsBehind = %d, want 1 (the Debian build must not count)", upd.VersionsBehind)
+	}
+}
+
+// The newest release for the pinned variant makes it up to date without a
+// registry round trip.
+func TestComputeUpdateMinorPinUpToDate(t *testing.T) {
+	u := &Updater{cfg: &config.UpdatesConfig{}}
+	rels := []changelog.Release{rel("1.31.6", false), rel("1.31.5", false)}
+	c := store.Container{ImageTag: "1.31"}
+	if upd, ok := u.computeUpdate(t.Context(), c, &changelog.Source{Type: changelog.SourceRegistry, Registry: "docker.io"}, rels); ok {
+		t.Errorf("expected no update, got %+v", upd)
 	}
 }
 
@@ -135,22 +196,52 @@ func TestComputeUpdateRegistryDescriptiveTag(t *testing.T) {
 	}
 }
 
-func TestNewestInLine(t *testing.T) {
-	ordered := make([]versioned, 0, 5)
-	for _, tag := range []string{"v3.0.0", "v2.14.0", "v2.13.0", "v2.9.1", "v1.8.0"} {
+// A variant tag that merely ends in digits must not be read as a version, or it
+// outranks the real releases: "alpine3.24" parses as 3.24.0, which is newer than
+// 1.31.6 and used to be offered as the update target.
+func TestParseVerRejectsVariantSuffixDigits(t *testing.T) {
+	for _, tag := range []string{"alpine3.24", "alpine3.24-slim", "trixie-perl", "cuda13", "php8.2", "pt211"} {
+		if _, err := parseVer(tag); err == nil {
+			t.Errorf("parseVer(%q) should have failed", tag)
+		}
+	}
+	// A version that follows a separator still counts.
+	for tag, want := range map[string]string{
+		"release-2.10.3": "2.10.3",
+		"node-18.19.0":   "18.19.0",
+		"v1.2.3":         "1.2.3",
+		"1.2.3-alpine":   "1.2.3-alpine",
+	} {
 		v, err := parseVer(tag)
 		if err != nil {
-			t.Fatal(err)
+			t.Errorf("parseVer(%q) error: %v", tag, err)
+			continue
 		}
-		ordered = append(ordered, versioned{rel: changelog.Release{Tag: tag}, ver: v})
+		if v.String() != want {
+			t.Errorf("parseVer(%q) = %s, want %s", tag, v, want)
+		}
 	}
-	if got := newestInLine("v2", ordered); got != "v2.14.0" {
-		t.Errorf("newestInLine(v2) = %q, want v2.14.0", got)
+}
+
+// The update target must be the newest real release, not a variant tag from the
+// registry listing.
+func TestComputeUpdateIgnoresVariantTagsInListing(t *testing.T) {
+	u := &Updater{cfg: &config.UpdatesConfig{}}
+	src := &changelog.Source{Type: changelog.SourceRegistry, Registry: "docker.io", Repository: "library/nginx"}
+	rels := []changelog.Release{
+		rel("alpine3.24", false),
+		rel("alpine3.24-slim", false),
+		rel("trixie-perl", false),
+		rel("mainline", false),
+		rel("1.31.6", false),
+		rel("1.30.5", false),
 	}
-	if got := newestInLine("v1", ordered); got != "v1.8.0" {
-		t.Errorf("newestInLine(v1) = %q, want v1.8.0", got)
+	c := store.Container{ImageTag: "1.25", Registry: "docker.io", Repository: "library/nginx"}
+	upd, ok := u.computeUpdate(t.Context(), c, src, rels)
+	if !ok || upd == nil {
+		t.Fatal("expected an update")
 	}
-	if got := newestInLine("latest", ordered); got != "v3.0.0" {
-		t.Errorf("newestInLine(latest) = %q, want v3.0.0", got)
+	if upd.LatestTag != "1.31.6" {
+		t.Errorf("LatestTag = %q, want 1.31.6", upd.LatestTag)
 	}
 }

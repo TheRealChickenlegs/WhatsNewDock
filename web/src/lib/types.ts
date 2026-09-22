@@ -39,6 +39,16 @@ export interface AgentUpdate {
   message?: string
 }
 
+// CheckStatus is the state of the current or most recent update check.
+export interface CheckStatus {
+  running: boolean
+  trigger?: string
+  updates_available?: number
+  last_error?: string
+  started_at?: string
+  finished_at?: string
+}
+
 export interface SelfUpdateRun {
   id: string
   started_at: string

@@ -9,6 +9,7 @@ import type {
   User,
   AuthSettings,
   AuthSettingsUpdate,
+  CheckStatus,
 } from '@/lib/types'
 import { Badge, Button, Card, CardHeader, Input, Label, Select, Toggle, Loading } from '@/components/ui'
 import { formatDate, timeAgo } from '@/lib/utils'
@@ -164,6 +165,8 @@ function UpdateSettings() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [checkMsg, setCheckMsg] = useState('')
+  const [checkFailed, setCheckFailed] = useState(false)
 
   useEffect(() => {
     if (data) {
@@ -204,8 +207,43 @@ function UpdateSettings() {
 
   const checkNow = async () => {
     setChecking(true)
-    await api.post('/api/v1/check')
-    setTimeout(() => setChecking(false), 1500)
+    setCheckMsg('')
+    try {
+      await api.post('/api/v1/check')
+      // The check runs in the background, so wait for it to finish. Returning
+      // straight away left the updates list looking empty even when the check
+      // went on to find updates.
+      const deadline = Date.now() + 5 * 60 * 1000
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        const state = await api.get<CheckStatus>('/api/v1/check')
+        if (state.running) {
+          if (Date.now() > deadline) {
+            setCheckFailed(true)
+            setCheckMsg('Still checking — results will appear on the Updates page when it finishes.')
+            break
+          }
+          continue
+        }
+        setCheckFailed(Boolean(state.last_error))
+        if (state.last_error) {
+          setCheckMsg(`Check failed: ${state.last_error}`)
+        } else if (state.updates_available) {
+          setCheckMsg(
+            `Check complete — ${state.updates_available} ` +
+              (state.updates_available === 1 ? 'update available.' : 'updates available.'),
+          )
+        } else {
+          setCheckMsg('Check complete — everything is up to date.')
+        }
+        break
+      }
+    } catch (e) {
+      setCheckFailed(true)
+      setCheckMsg(e instanceof Error ? e.message : 'Check failed')
+    } finally {
+      setChecking(false)
+    }
   }
 
   if (loading && !data) return <Loading />
@@ -221,6 +259,17 @@ function UpdateSettings() {
           </Button>
         }
       />
+      {checkMsg && (
+        <p
+          role="status"
+          className={
+            'border-b border-border px-5 py-2 text-xs ' +
+            (checkFailed ? 'text-danger' : 'text-muted-foreground')
+          }
+        >
+          {checkMsg}
+        </p>
+      )}
       <div className="grid grid-cols-1 gap-5 p-5 md:grid-cols-2">
         <div>
           <Label>Changelog versions to keep</Label>

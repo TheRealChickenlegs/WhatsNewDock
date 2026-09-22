@@ -32,6 +32,8 @@ const (
 	snapshotTimeout       = 60 * time.Second
 	offlineMarkInterval   = 60 * time.Second
 	offlineThreshold      = 2 * time.Minute
+	// checkRunTimeout bounds one full update check, scheduled or on demand.
+	checkRunTimeout = 20 * time.Minute
 )
 
 // Server is the central WhatsNewDock server runtime.
@@ -54,6 +56,51 @@ type Server struct {
 	selfUpdate *selfupdate.Checker
 	// selfRun is the live agent-then-controller update run, if any.
 	selfRun *selfUpdateTracker
+	// checks records the state of the last update check so the UI can wait for
+	// an on-demand check to finish instead of reading stale results.
+	checks *checkRunTracker
+}
+
+// checkRunTracker records the state of the most recent update check.
+type checkRunTracker struct {
+	mu         sync.Mutex
+	running    bool
+	trigger    string
+	startedAt  time.Time
+	finishedAt time.Time
+	err        string
+}
+
+// begin marks a check as running. It reports false when one is already in
+// flight, so a second request joins the running check instead of starting a
+// duplicate.
+func (c *checkRunTracker) begin(trigger string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.running {
+		return false
+	}
+	c.running = true
+	c.trigger = trigger
+	c.startedAt = time.Now().UTC()
+	c.err = ""
+	return true
+}
+
+func (c *checkRunTracker) end(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.running = false
+	c.finishedAt = time.Now().UTC()
+	if err != nil {
+		c.err = err.Error()
+	}
+}
+
+func (c *checkRunTracker) status() (running bool, trigger string, startedAt, finishedAt time.Time, errMsg string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.running, c.trigger, c.startedAt, c.finishedAt, c.err
 }
 
 // selfUpdateSelfID is the container this process runs in.
@@ -168,6 +215,7 @@ func New(cfg *config.Config, version string) (*Server, error) {
 		loginLimiter:   newLoginLimiter(),
 		jobs:           newJobTracker(),
 		selfRun:        &selfUpdateTracker{},
+		checks:         &checkRunTracker{},
 	}
 	s.selfUpdate = selfupdate.New(s.currentBuild, func(ctx context.Context) (*selfupdate.Release, error) {
 		rel, err := ch.LatestRelease(ctx, cfg.SelfUpdate.Repo)
@@ -431,17 +479,7 @@ func (s *Server) updaterLoop(ctx context.Context) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 
-	run := func() {
-		ctx2, cancel := context.WithTimeout(ctx, 20*time.Minute)
-		defer cancel()
-		slog.Info("starting update check")
-		start := time.Now()
-		if err := s.updater.CheckAll(ctx2); err != nil {
-			slog.Error("update check failed", "err", err)
-			return
-		}
-		slog.Info("update check complete", "duration", time.Since(start).String())
-	}
+	run := func() { _ = s.runUpdateCheck(ctx, "scheduled") }
 
 	for {
 		select {
@@ -524,9 +562,30 @@ func (s *Server) selfUpdateInterval() time.Duration {
 	return d
 }
 
-// triggerCheck runs an update check on demand (used by the API).
-func (s *Server) triggerCheck(ctx context.Context) error {
-	return s.updater.CheckAll(ctx)
+// runUpdateCheck performs one full update check and records its state.
+//
+// The caller supplies the parent context. Work started from an HTTP handler
+// must not inherit the request context: net/http cancels it as soon as the
+// handler returns, which would abort the check mid-flight and leave the UI
+// showing nothing.
+func (s *Server) runUpdateCheck(parent context.Context, trigger string) error {
+	if !s.checks.begin(trigger) {
+		slog.Info("update check already running", "trigger", trigger)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(parent, checkRunTimeout)
+	defer cancel()
+
+	slog.Info("starting update check", "trigger", trigger)
+	start := time.Now()
+	err := s.updater.CheckAll(ctx)
+	s.checks.end(err)
+	if err != nil {
+		slog.Error("update check failed", "trigger", trigger, "err", err)
+		return err
+	}
+	slog.Info("update check complete", "trigger", trigger, "duration", time.Since(start).String())
+	return nil
 }
 
 func newServerID() string {

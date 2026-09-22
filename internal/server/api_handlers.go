@@ -672,13 +672,47 @@ func (s *Server) handleSetPin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleTriggerCheck(w http.ResponseWriter, r *http.Request) {
-	// Run in the background and return immediately.
+	// Run in the background and return immediately. The context must outlive
+	// the response: net/http cancels the request context as soon as this
+	// handler returns, and a check that inherits it is aborted mid-flight,
+	// which made "Check now" finish without ever reporting an update.
+	ctx := context.WithoutCancel(r.Context())
 	go func() {
-		if err := s.triggerCheck(r.Context()); err != nil {
+		if err := s.runUpdateCheck(ctx, "manual"); err != nil {
 			_ = s.st.AddEvent(s.eventNow("check_failed", "system", "", "", err.Error()))
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
+}
+
+// handleCheckStatus reports the state of the current or most recent update
+// check, so the UI can wait for a manual check to finish and show its result
+// rather than reading the previous set of updates.
+func (s *Server) handleCheckStatus(w http.ResponseWriter, r *http.Request) {
+	running, trigger, startedAt, finishedAt, errMsg := s.checks.status()
+
+	updates := 0
+	if containers, err := s.st.ListContainers(store.ContainerFilter{}); err == nil {
+		for _, c := range containers {
+			if c.Update != nil {
+				updates++
+			}
+		}
+	}
+
+	out := map[string]any{
+		"running":           running,
+		"trigger":           trigger,
+		"updates_available": updates,
+		"last_error":        errMsg,
+	}
+	if !startedAt.IsZero() {
+		out["started_at"] = startedAt
+	}
+	if !finishedAt.IsZero() {
+		out["finished_at"] = finishedAt
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {

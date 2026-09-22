@@ -46,6 +46,11 @@ func (u *Updater) ResetCache() {
 
 // CheckAll runs a full update-check cycle across every container.
 func (u *Updater) CheckAll(ctx context.Context) error {
+	// Fail loudly on an already-dead context rather than walking the whole
+	// fleet and reporting success with no data.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	u.ResetCache()
 	containers, err := u.st.ListContainers(store.ContainerFilter{})
 	if err != nil {
@@ -90,6 +95,12 @@ func (u *Updater) CheckAll(ctx context.Context) error {
 	for key, src := range seen {
 		rels, err := u.ch.FetchReleases(ctx, src)
 		if err != nil {
+			// A check whose context was cancelled must be reported as failed.
+			// Swallowing it is how an aborted check used to look like a
+			// successful one that simply found nothing.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			// Record the fetch failure as "no data" but keep going.
 			rels = nil
 		}
@@ -103,6 +114,9 @@ func (u *Updater) CheckAll(ctx context.Context) error {
 
 	// Second pass: compute and persist per-container updates.
 	for _, it := range items {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		u.mu.Lock()
 		rels := u.cache[it.repoKey]
 		u.mu.Unlock()
@@ -127,6 +141,19 @@ func (u *Updater) applyContainer(ctx context.Context, c store.Container, src *ch
 }
 
 // computeUpdate decides whether an update exists and how far behind we are.
+//
+// Two signals are available and each answers a different question. The release
+// list answers "is there a newer version to move the pin to?"; the registry
+// digest answers "has the tag the container already tracks moved under it?".
+// Which one applies depends on the tag:
+//
+//   - A version pin ("1.25.3", "1.25", "v2", "1.25-alpine") is compared
+//     against the release list. Partial pins only move for a newer version
+//     line, since within their own line they still track the moving tag — the
+//     digest covers that — and only releases with the same variant suffix are
+//     candidates, so "1.25-alpine" is never offered the Debian build.
+//   - A tag with no version in it ("latest", "stable", "mainline",
+//     "server-cuda13") is a moving target, so the digest decides.
 func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *changelog.Source, rels []changelog.Release) (*store.Update, bool) {
 	// Filter prereleases unless configured to include them.
 	filtered := make([]changelog.Release, 0, len(rels))
@@ -141,66 +168,67 @@ func (u *Updater) computeUpdate(ctx context.Context, c store.Container, src *cha
 		return u.registryFallback(ctx, c)
 	}
 
-	// Order releases newest-first by semver when possible.
-	ordered := orderBySemver(filtered)
+	// Version pins, complete or partial. Reading a partial version as a
+	// floating tag is how a container on "nginx:1.25" could sit silent while
+	// the newest release was 1.31: its digest for "1.25" was up to date, and
+	// nothing asked whether a newer line existed.
+	if cur, err := parseVer(c.ImageTag); err == nil {
+		// The suffix is part of what the operator chose, so only releases
+		// carrying the same suffix are candidates.
+		variant := cur.Prerelease()
+		precision := versionPrecision(c.ImageTag)
 
-	// Floating tags ("latest", "v2", "2.14", …) move over time, so the only
-	// reliable signal is whether the running image's digest still matches the
-	// registry's current manifest for that tag. When it has moved, label the
-	// update with the newest release in the same version line.
-	if isFloatingTag(c.ImageTag) {
-		upd, ok := u.registryFallback(ctx, c)
-		if !ok || upd == nil {
-			return nil, false
-		}
-		if target := newestInLine(c.ImageTag, ordered); target != "" {
-			upd.LatestTag = target
-		}
-		return upd, true
-	}
-
-	// Pinned tags: compare against the ordered release list.
-	latest := ordered[0].rel.Tag
-	cur, curErr := parseVer(c.ImageTag)
-	if curErr == nil {
-		behind := 0
-		for _, v := range ordered {
-			if v.ver != nil && v.ver.GreaterThan(cur) {
-				behind++
+		behind, latest := 0, ""
+		for _, v := range versionedReleases(filtered) {
+			if v.ver.Prerelease() != variant || !isUpdateTarget(cur, precision, v.ver) {
+				continue
+			}
+			behind++
+			if latest == "" {
+				// Newest first: the first match is the update target.
+				latest = v.rel.Tag
 			}
 		}
-		if behind == 0 {
-			return nil, false
+		if behind > 0 {
+			return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: behind}, true
 		}
-		return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: behind}, true
-	}
-
-	// Non-semver current tag. Registry tag listings (Docker Hub, GHCR, …) are
-	// not version-ordered — they mix variant and date-based tags — so the
-	// digest comparison is the only reliable update signal for them.
-	if src.Type == changelog.SourceRegistry {
+		// Nothing newer to move to, but the tag may have been re-pushed in
+		// place — exactly what happens when the container tracks a partial tag
+		// like "1.31" and a new patch lands. Let the digest decide.
 		return u.registryFallback(ctx, c)
 	}
 
-	// VCS sources (GitHub/GitLab/Gitea) have version-ordered release lists, so
-	// fall back to the tag's position (e.g. build-number tags like "b10549").
-	idx := -1
-	for i, r := range ordered {
-		if r.rel.Tag == c.ImageTag {
-			idx = i
-			break
+	// The tag carries no version. A release list from a VCS source is
+	// version-ordered, so a tag that names one of its releases (build numbers
+	// like "b10549") can be placed by position.
+	ordered := orderBySemver(filtered)
+	if src != nil && src.Type != changelog.SourceRegistry {
+		idx := -1
+		for i, r := range ordered {
+			if r.rel.Tag == c.ImageTag {
+				idx = i
+				break
+			}
+		}
+		if idx == 0 {
+			return nil, false
+		}
+		if idx > 0 {
+			return &store.Update{CurrentTag: c.ImageTag, LatestTag: ordered[0].rel.Tag, VersionsBehind: idx}, true
 		}
 	}
-	if idx == 0 {
+
+	// Otherwise the registry digest is the only signal. When it has moved,
+	// label the update with the newest release so the card can name a version
+	// rather than just repeating the tag.
+	upd, ok := u.registryFallback(ctx, c)
+	if !ok || upd == nil {
 		return nil, false
 	}
-	if idx > 0 {
-		return &store.Update{CurrentTag: c.ImageTag, LatestTag: latest, VersionsBehind: idx}, true
+	if vs := versionedReleases(filtered); len(vs) > 0 {
+		upd.LatestTag = vs[0].rel.Tag
 	}
-	// The tag is neither a version nor a release name (e.g. a descriptive
-	// variant tag like "server-cuda13"). Treat it as floating and rely on the
-	// registry digest to decide whether an update exists.
-	return u.registryFallback(ctx, c)
+	return upd, true
 }
 
 // registryFallback compares the running image digest against the registry's
@@ -237,6 +265,12 @@ func parseVer(tag string) (*semver.Version, error) {
 	start := strings.IndexFunc(s, func(r rune) bool { return r >= '0' && r <= '9' })
 	if start < 0 {
 		return nil, fmt.Errorf("no numeric version in %q", tag)
+	}
+	// The version must be the whole tag or start after a separator. Without
+	// this, a variant tag that merely ends in digits is read as a version:
+	// "alpine3.24" would become 3.24.0 and outrank a real 1.31.6 release.
+	if start > 0 && !strings.ContainsRune("-_", rune(s[start-1])) {
+		return nil, fmt.Errorf("no version at the start of %q", tag)
 	}
 	s = s[start:]
 	var build string
@@ -277,6 +311,67 @@ func parseVer(tag string) (*semver.Version, error) {
 	return semver.NewVersion(joined)
 }
 
+// versionPrecision returns how many numeric components the tag spells out: 1
+// for "v2", 2 for "1.25", 3 (or more) for "1.25.3". Anything that does not
+// start with a dotted numeric version counts as 3, i.e. an explicit pin.
+func versionPrecision(tag string) int {
+	s := strings.ToLower(strings.TrimSpace(tag))
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
+	i := strings.IndexFunc(s, func(r rune) bool { return r >= '0' && r <= '9' })
+	if i < 0 {
+		return 3
+	}
+	s = s[i:]
+	if j := strings.IndexAny(s, "-+"); j >= 0 {
+		s = s[:j]
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) == 0 || len(parts) > 3 {
+		return 3
+	}
+	for _, p := range parts {
+		if _, err := strconv.Atoi(p); err != nil {
+			return 3
+		}
+	}
+	return len(parts)
+}
+
+// isUpdateTarget reports whether release version v is a reason to move off the
+// running tag. For a complete pin any greater version counts. For a partial pin
+// such as "1.25" only a greater version line does: within the pinned line the
+// running container already tracks the moving tag, so a same-line patch is not
+// something the operator has to act on — the registry digest covers that case.
+func isUpdateTarget(cur *semver.Version, precision int, v *semver.Version) bool {
+	switch precision {
+	case 1:
+		return v.Major() > cur.Major()
+	case 2:
+		return v.Major() > cur.Major() || (v.Major() == cur.Major() && v.Minor() > cur.Minor())
+	default:
+		return v.GreaterThan(cur)
+	}
+}
+
+// versionedReleases parses each release tag on its own and returns the
+// parseable ones, newest first. Unlike orderBySemver it does not give up when a
+// registry tag listing mixes in tags that carry no version ("mainline",
+// "alpine", "stable"): those are simply skipped, so a minor-pinned container
+// (for example "nginx:1.25") is still compared against the releases that do
+// have versions.
+func versionedReleases(rels []changelog.Release) []versioned {
+	out := make([]versioned, 0, len(rels))
+	for _, r := range rels {
+		v, err := parseVer(r.Tag)
+		if err != nil {
+			continue
+		}
+		out = append(out, versioned{rel: r, ver: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ver.GreaterThan(out[j].ver) })
+	return out
+}
+
 func orderBySemver(rels []changelog.Release) []versioned {
 	out := make([]versioned, 0, len(rels))
 	all := true
@@ -306,21 +401,17 @@ var mutableTags = map[string]bool{
 	"beta": true, "canary": true, "unstable": true, "testing": true, "next": true,
 }
 
-// isFloatingTag reports whether a tag is a moving target rather than a pinned
-// version. In addition to the known mutable aliases ("latest", "stable", …),
-// a partial semver with 1 or 2 numeric components ("2", "v2", "2.14") is a
-// floating line tag that tracks the newest release in that line.
-func isFloatingTag(tag string) bool {
-	t := strings.ToLower(strings.TrimSpace(tag))
-	if t == "" || mutableTags[t] {
-		return true
-	}
+// hasNumericVersion reports whether a tag begins with a dotted numeric version,
+// with or without a leading v and with any -variant suffix ignored: "1",
+// "v2", "1.25", "1.25.3-alpine" all do; "mainline", "alpine" and "b10549" do
+// not.
+func hasNumericVersion(t string) bool {
 	s := strings.TrimPrefix(strings.TrimPrefix(t, "v"), "V")
 	if i := strings.IndexAny(s, "-+"); i >= 0 {
 		s = s[:i]
 	}
 	parts := strings.Split(s, ".")
-	if len(parts) != 1 && len(parts) != 2 {
+	if len(parts) == 0 {
 		return false
 	}
 	for _, p := range parts {
@@ -332,56 +423,6 @@ func isFloatingTag(tag string) bool {
 		}
 	}
 	return true
-}
-
-// floatingLine extracts the major and optional minor component of a floating
-// tag. ok is false when the tag has no numeric line (e.g. "latest").
-func floatingLine(tag string) (maj, min uint64, hasMinor, ok bool) {
-	s := strings.ToLower(strings.TrimSpace(tag))
-	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
-	if i := strings.IndexAny(s, "-+"); i >= 0 {
-		s = s[:i]
-	}
-	parts := strings.Split(s, ".")
-	if len(parts) == 0 || parts[0] == "" {
-		return 0, 0, false, false
-	}
-	m, err := strconv.ParseUint(parts[0], 10, 64)
-	if err != nil {
-		return 0, 0, false, false
-	}
-	maj = m
-	if len(parts) >= 2 && parts[1] != "" {
-		if n, err := strconv.ParseUint(parts[1], 10, 64); err == nil {
-			return maj, n, true, true
-		}
-	}
-	return maj, 0, false, true
-}
-
-// newestInLine returns the newest release in the same major(.minor) line as the
-// floating tag, or the newest release overall when the tag has no numeric line.
-func newestInLine(tag string, ordered []versioned) string {
-	if len(ordered) == 0 {
-		return ""
-	}
-	maj, min, hasMinor, ok := floatingLine(tag)
-	if !ok {
-		return ordered[0].rel.Tag
-	}
-	for _, v := range ordered {
-		if v.ver == nil {
-			continue
-		}
-		if v.ver.Major() != maj {
-			continue
-		}
-		if hasMinor && v.ver.Minor() != min {
-			continue
-		}
-		return v.rel.Tag
-	}
-	return ordered[0].rel.Tag
 }
 
 func repoKey(src *changelog.Source) string {
