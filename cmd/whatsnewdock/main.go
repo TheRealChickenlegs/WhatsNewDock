@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,15 +49,31 @@ func main() {
 	}
 	if cfg.Mode == config.ModeAgent {
 		if err := runAgent(ctx, cfg); err != nil {
-			slog.Error("agent exited", "err", err)
-			os.Exit(1)
+			exit("agent", err)
 		}
+		slog.Info("agent stopped")
 		return
 	}
 	if err := runServer(ctx, cfg); err != nil {
-		slog.Error("server exited", "err", err)
-		os.Exit(1)
+		exit("server", err)
 	}
+}
+
+// exit ends the process, treating a cancelled context as the normal shutdown it
+// is. A container being stopped — by an operator, or by WhatsNewDock updating
+// itself — sends SIGTERM, and reporting that as a failure both misleads whoever
+// reads the logs and gives the container a non-zero exit code for a clean stop.
+func exit(what string, err error) {
+	if isCleanShutdown(err) {
+		slog.Info(what + " stopped")
+		return
+	}
+	slog.Error(what+" exited", "err", err)
+	os.Exit(1)
+}
+
+func isCleanShutdown(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func runServer(ctx context.Context, cfg *config.Config) error {

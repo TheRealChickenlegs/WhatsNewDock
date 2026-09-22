@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/whatsnewdock/whatsnewdock/internal/config"
@@ -100,7 +102,7 @@ func (a *Agent) reportOnce(ctx context.Context) {
 		rep.SelfImage, rep.SelfDigest = a.resolveSelf(ctx)
 	}
 	if err := a.postJSON(ctx, "/api/agent/v1/report", rep, nil); err != nil {
-		slog.Error("report failed", "err", err)
+		logReportFailure("report failed", err)
 	} else {
 		slog.Debug("reported", "containers", len(rep.Containers))
 	}
@@ -109,7 +111,7 @@ func (a *Agent) reportOnce(ctx context.Context) {
 func (a *Agent) pollCommands(ctx context.Context) {
 	var cmds []protocol.Command
 	if err := a.getJSON(ctx, "/api/agent/v1/commands", &cmds); err != nil {
-		slog.Error("command poll failed", "err", err)
+		logReportFailure("command poll failed", err)
 		return
 	}
 	for _, cmd := range cmds {
@@ -205,8 +207,7 @@ func (a *Agent) postJSON(ctx context.Context, path string, payload any, raw []by
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return serverError(resp)
 	}
 	return nil
 }
@@ -223,10 +224,74 @@ func (a *Agent) getJSON(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		return serverError(resp)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(out)
+}
+
+// ServerError is a non-2xx reply from the server.
+type ServerError struct {
+	Status  int
+	Message string
+}
+
+func (e *ServerError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("server returned %d: %s", e.Status, e.Message)
+	}
+	return fmt.Sprintf("server returned %d", e.Status)
+}
+
+// Unavailable reports whether the reply means the server is not reachable right
+// now — a restart, a deploy, or a proxy with no healthy upstream. It is worth
+// retrying and not worth an error line.
+func (e *ServerError) Unavailable() bool {
+	switch e.Status {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// serverError reads the server's own error message when it sent JSON. Bodies
+// that are not JSON — a proxy's HTML error page, say — are dropped rather than
+// pasted into the log.
+func serverError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	err := &ServerError{Status: resp.StatusCode}
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		err.Message = strings.TrimSpace(payload.Error)
+	}
+	return err
+}
+
+// transient reports whether an error is the server being briefly unavailable,
+// which the agent retries on its own and should not shout about.
+func transient(err error) bool {
+	var se *ServerError
+	if errors.As(err, &se) {
+		return se.Unavailable()
+	}
+	// A dial failure or a dropped connection is the server restarting.
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF)
+}
+
+// logReportFailure keeps a restart quiet and a real fault loud.
+func logReportFailure(what string, err error) {
+	if transient(err) {
+		slog.Warn(what+": server unavailable, will retry", "err", err)
+		return
+	}
+	slog.Error(what, "err", err)
 }
 
 func (a *Agent) url(path string) string {
