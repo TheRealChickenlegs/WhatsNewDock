@@ -177,6 +177,16 @@ for a few seconds and comes back on the new version, with the same name, ports,
 volumes and settings. The page polls until the new version answers and then
 reloads itself.
 
+If you monitor other hosts with **agents**, the update runs in two phases:
+every reachable agent is moved onto the new version first, and only once they are
+all back does this controller restart. The card lists each agent and the phase it
+is in. An agent that fails, or that does not report back within three minutes,
+stops the run and **leaves this controller alone** — a deployment is never split
+across two versions. Offline agents are listed as skipped; fix or remove the
+agent and press **Update now** again. The **Servers** page shows the build each
+agent runs, green when it matches this controller's version and red when it is
+behind.
+
 There are two things it can detect, and the card says which:
 
 - **A newer release** (`:0.1.1` → `:v0.1.2`) — the version pair is shown, and the
